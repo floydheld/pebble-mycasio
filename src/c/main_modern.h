@@ -1718,6 +1718,9 @@ static void health_handler(HealthEventType event, void *context) {
 //      }
 //      return; //TODO: test if this can work
 			break;
+		
+		case HealthEventHRVUpdate:
+			break; // a new enum value not available in the original Pebble SDK, just not handled here, is unused.
 		case HealthEventMetricAlert:
 			//do_update = -1; //TODO
 			break;

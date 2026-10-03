@@ -55,30 +55,3 @@ int calc_moonphase_number(double latitude)
   //if (i > 27) i = 0;
   //return i;
 }
-
-int moonphase_char_number(int moonphase_number)
-{
-
-  //static char moon[] = "m";
-  int char_number = 0;
-  
-  // select correct font char
-  if (moonphase_number == 14)
-  {
-    char_number = 48;
-  } else if (moonphase_number == 0)
-  {
-    char_number = 49;
-  } else if (moonphase_number < 14)
-  {
-    char_number = moonphase_number + 96;
-  } else
-  {
-    char_number = moonphase_number + 95;
-  }
-  
-  return char_number;
-}
-
-
-

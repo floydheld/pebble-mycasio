@@ -4,79 +4,18 @@
 var CLIMACON = {
   'cloud'            : '!',
   'cloud_day'        : '"',
-  'cloud_night'      : '#',
   'rain'             : '$',
-  'rain_day'         : '%',
-  'rain_night'       : '&',
   'showers'          : "'",
-  'showers_day'      : '(',
-  'showers_night'    : ')',
   'downpour'         : '*',
-  'downpour_day'     : '+',
-  'downpour_night'   : ',',
   'drizzle'          : '-',
-  'drizzle_day'      : '.',
-  'drizzle_night'    : '/',
   'sleet'            : '0',
-  'sleet_day'        : '1',
-  'sleet_night'      : '2',
-  'hail'             : '3',
-  'hail_day'         : '4',
-  'hail_night'       : '5',
-  'flurries'         : '6',
-  'flurries_day'     : '7',
-  'flurries_night'   : '8',
   'snow'             : '9',
-  'snow_day'         : ':',
-  'snow_night'       : ';',
   'fog'              : '<',
-  'fog_day'          : '=',
-  'fog_night'        : '>',
   'haze'             : '?',
-  'haze_day'         : '@',
-  'haze_night'       : 'A',
   'wind'             : 'B',
-  'wind_cloud'       : 'C',
-  'wind_cloud_day'   : 'D',
-  'wind_cloud_night' : 'E',
   'lightning'        : 'F',
-  'lightning_day'    : 'G',
-  'lightning_night'  : 'H',
-// ---
   'sun'              : 'I',
-   'set'             : 'J',
-   'rise'            : 'K',
-   'low'             : 'L',
-   'lower'           : 'M',
-  'moon'             : 'N',
-   'new'             : 'O',
-   'wax_cresc'       : 'P',
-   'wax_quart'       : 'Q',
-   'wax_gib'         : 'R',
-   'full'            : 'S',
-   'wane_cresc'      : 'T',
-   'wane_quart'      : 'U',
-   'wane_gib'        : 'V',
-  'snowflake'        : 'W',
-  'tornado'          : 'X',
-  'thermometer'      : 'Y',
-   'temp_low'        : 'Z',
-   'temp_med-low'    : '[',
-   'temp_med-high'   : "\\",
-   'temp_high'       : ']',
-   'temp_full'       : '^',
-  'celsius'          : '`',
-  'fahrenheit'       : '_',
-  'compass'          : 'a',
-   'north'           : 'b',
-   'east'            : 'c',
-   'south'           : 'd',
-   'west'            : 'e',
-  'umbrella'         : 'f',
-  'sunglasses'       : 'g',
-  'cloud_refresh'    : 'h',
-  'cloud_up'         : 'i',
-  'cloud_down'       : 'j'
+  'tornado'          : 'X'
 };
 
 var OWMclimacon= {
@@ -139,34 +78,12 @@ var OWMclimacon= {
   801 : CLIMACON['cloud_day'], // few clouds
   802 : CLIMACON['cloud_day'], // scattered clouds
   803 : CLIMACON['cloud_day'], // broken clouds
-  804 : CLIMACON['cloud'], // overcast clouds
-// Extreme
-  900 : CLIMACON['tornado'], // tornado
-  901 : CLIMACON['tornado'], // tropical storm
-  902 : CLIMACON['tornado'], // hurricane
-  903 : CLIMACON['temp_low'], // cold
-  904 : CLIMACON['temp_high'], // hot
-  905 : CLIMACON['wind'], // windy
-  906 : CLIMACON['hail'], // hail 
-// Additional
-  950 : CLIMACON['set'], // Setting
-  951 : CLIMACON['sun'], // Calm
-  952 : CLIMACON['sun'], // Light breeze
-  953 : CLIMACON['sun'], // Gentle Breeze
-  954 : CLIMACON['sun'], // Moderate breeze
-  955 : CLIMACON['sun'], // Fresh Breeze
-  956 : CLIMACON['wind'], // Strong breeze
-  957 : CLIMACON['wind'], // High wind, near gale
-  958 : CLIMACON['wind'], // Gale
-  959 : CLIMACON['wind'], // Severe Gale
-  960 : CLIMACON['lightning'], // Storm
-  961 : CLIMACON['lightning'], // Violent Storm
-  962 : CLIMACON['tornado'], // Hurricane 
+  804 : CLIMACON['cloud'] // overcast clouds
 };
 
 var OWM_API_KEY = "1b5b37a3117bb6acd583d662fdbb24c7";
 var OWM_LANG = "de";
-var DEFAULT_LOCATION = "Berlin"; // used when the phone never delivered a position
+var DEFAULT_LOCATION = "Vienna"; // used when the phone never delivered a position
 
 var xhrRequest = function (url, type, callback) {
   var xhr = new XMLHttpRequest();
@@ -250,7 +167,6 @@ function sendWeather(lat, lon, warn_location) {
       var dictionary = {
         "KEY_LOCATION_NAME": weather.name,
         "KEY_LOCATION_LAT": Math.round(weather.coord.lat*1000000),
-        "KEY_LOCATION_LON": Math.round(weather.coord.lon*1000000),
         "KEY_WEATHER_TEMP": Math.round(weather.main.temp),
         "KEY_WEATHER_STRING_1": temp_min_max,
         "KEY_WEATHER_STRING_2": condition,
@@ -270,11 +186,66 @@ function sendWeather(lat, lon, warn_location) {
   });
 }
 
+// ÖBB departures (Scotty live stationboard): mornings Pressbaum -> Wien Westbahnhof, evenings back
+var PRESSBAUM = {id: "1132415", lat: 48.181354, lon: 16.077837};
+var WESTBAHNHOF = {id: "1291501"};
+var PRESSBAUM_RADIUS_KM = 5;     // the area of Pressbaum around the station
+var MAX_POSITION_ERROR_KM = 1;   // less accurate positions are ignored
+
+// direction 1 = morning: until leaving the area of Pressbaum, 2 = evening: until arriving there; then the watch is told that the morning / evening is over
+function getDepartures(direction) {
+  navigator.geolocation.getCurrentPosition(
+    function(pos) {
+      var dx = (pos.coords.longitude - PRESSBAUM.lon) * 111.32 * Math.cos(PRESSBAUM.lat * Math.PI / 180);
+      var dy = (pos.coords.latitude - PRESSBAUM.lat) * 110.57;
+      var in_pressbaum = Math.sqrt(dx*dx + dy*dy) < PRESSBAUM_RADIUS_KM;
+      if ((pos.coords.accuracy <= MAX_POSITION_ERROR_KM*1000) && (in_pressbaum !== (direction == 1))) {
+        console.log("trains of direction " + direction + " are over, in Pressbaum: " + in_pressbaum);
+        Pebble.sendAppMessage({"KEY_TRAIN_DONE": direction});
+      } else {
+        sendDepartures(direction);
+      }
+    },
+    function(err) {
+      console.log("location error (" + err.code + "): " + err.message);
+      sendDepartures(direction); // the watch shows them until the end time
+    },
+    {enableHighAccuracy: false, timeout: 10000, maximumAge: 60000}
+  );
+}
+
+function sendDepartures(direction) {
+  var from = (direction == 1) ? PRESSBAUM : WESTBAHNHOF, to = (direction == 1) ? WESTBAHNHOF : PRESSBAUM;
+  var url = "https://fahrplan.oebb.at/bin/stboard.exe/dn?L=vs_scotty.vs_liveticker&evaId=" + from.id + "&dirInput=" + to.id + "&boardType=dep&productsFilter=1111111111111&tickerID=dep&start=yes&eqstops=false&maxJourneys=10&additionalTime=0&outputMode=tickerDataOnly";
+  xhrRequest(url, 'GET', function(text) {
+    var journeys;
+    try {
+      // the answer is "journeysObj = {...}"
+      journeys = JSON.parse(text.substring(text.indexOf("{"))).journey;
+    } catch (e) {
+      console.log("could not parse departures: " + text);
+      return;
+    }
+    // per departure 6 characters: time HHMM (incl. delay), S = S-Bahn / X = REX / else the first letter, 0 = on time / D = delayed / C = cancelled
+    var departures = "";
+    for (var i = 0; i < Math.min(journeys.length, 10); i++) {
+      var j = journeys[i], rt = j.rt || {};
+      var cancelled = (rt.status === "Ausfall");
+      var delayed = !cancelled && rt.dlt && (rt.dlt !== j.ti);
+      var type = /^S/.test(j.pr) ? "S" : /^REX/.test(j.pr) ? "X" : j.pr.charAt(0);
+      departures += (delayed ? rt.dlt : j.ti).replace(":", "") + type + (cancelled ? "C" : delayed ? "D" : "0");
+    }
+    console.log("Sending departures: " + departures);
+    Pebble.sendAppMessage({"KEY_TRAIN_DEPARTURES": departures});
+  });
+}
+
 Pebble.addEventListener('ready', function(e) {
   console.log("PebbleKit JS ready!");
 });
 
-// the watch requests the weather by sending any app message
+// the watch requests the departures with KEY_TRAIN_REQUEST (direction), else the weather
 Pebble.addEventListener('appmessage', function(e) {
-  getWeather();
+  if (e.payload["KEY_TRAIN_REQUEST"]) getDepartures(e.payload["KEY_TRAIN_REQUEST"]);
+  else getWeather();
 });

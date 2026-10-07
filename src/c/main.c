@@ -8,14 +8,17 @@
 
 //deploy:
 /*
-/mnt/d/0meine dateien/my progs/github/pebble-mycasio$ pebble install --phone 192.168.0.6
+pebble build
+pebble install --phone <ip address>
 */
 // Pebble Time 2 (emery, 200x228)
 // Rows from top to bottom: location | last update, weather condition, weather icon | next rain | temperature + min/max temperature, time, date, sleep (deep sleep) | battery
-// Each row is as high as its content plus PADDING above and below. The weather condition takes the remaining space.
+// At the times of the trains (config.h) the date and the sleep are replaced by the ÖBB departures.
+// Each row is as high as its content plus PADDING above and below (the clock, the date and the bottom row 2px more). The weather condition takes the remaining space, which is the height of the date row.
 // Rows with the same background are separated by a 1px line.
 #define PADDING 2
-#define TIME_PADDING (PADDING + 2) // the time has 2px more
+#define BIG_PADDING  (PADDING + 2) // the date and the bottom row
+#define TIME_PADDING (PADDING + 4) // the time
 
 #define DIGIT_WIDTH     40
 #define DIGIT_HEIGHT    66
@@ -24,47 +27,52 @@
 #define TIME_X          ((200 - 4*DIGIT_WIDTH - 4*DIGIT_GAP - COLON_SIZE)/2)
 #define COLON_X         (TIME_X + 2*(DIGIT_WIDTH + DIGIT_GAP))
 #define RAIN_WIDTH      48 // next rain indicator between weather icon and temperature
+#define TRAIN_GAP       6  // between the departures
+#define MAX_DEPARTURES  10
+#define NOTIF_ICON_SIZE 27 // notification icons of the phone in the bottom row instead of the sleep, as high as the row (ICON_SIZE in the Android app)
+#define NOTIF_ICON_BYTES ((NOTIF_ICON_SIZE*NOTIF_ICON_SIZE + 7)/8)
+#define NOTIF_ICON_GAP  4
+#define MAX_NOTIF_ICONS 6
 
-// measured glyph extents of the system fonts: top offset within the text layer and height (incl. descenders)
-#define GOTHIC_18_TOP        6
-#define GOTHIC_18_H          13
-#define GOTHIC_18_BOLD_TOP   7
-#define GOTHIC_18_BOLD_H     11
-#define GOTHIC_24_BOLD_TOP   10
-#define GOTHIC_24_BOLD_H     18
-#define GOTHIC_24_BOLD_DESC  4    // descender part of the height
-#define GOTHIC_28_BOLD_TOP   8    // digits
-#define GOTHIC_28_BOLD_H     20
-#define SLEEP_TOP            8    // GOTHIC_24_BOLD with parentheses
-#define SLEEP_H              18
-// custom fonts (DejaVu Sans Bold), measured the same way; condition: single line sizes 36, 30, 24 and two lines of 18
-#define CONDITION_36_TOP     9
-#define CONDITION_36_H       35
-#define CONDITION_30_TOP     7
-#define CONDITION_30_H       29
-#define CONDITION_24_TOP     6
-#define CONDITION_24_H       23
-#define CONDITION_18_TOP     4
-#define CONDITION_18_H       17
-#define CONDITION_18_PITCH   18
-#define TEMP_TOP             9    // size 36, digits and degree sign
-#define TEMP_H               26
-#define TEMP_MIN_MAX_TOP     1    // size 22, incl. the slash
-#define TEMP_MIN_MAX_H       23
+// All texts except the time and the departures are in Montserrat Medium (the last update in Montserrat Regular, the date and the sleep in Montserrat SemiBold), in the sizes of the names. Measured glyph extents (like the
+// Pebble font generator renders them): top offset of the capitals and digits within the text layer, their height down to the baseline, and the descenders.
+// The departures are in the system font Gothic Bold, GOTHIC_* measured in the emulator.
+#define TEXT_14_TOP          3
+#define TEXT_14_H            10
+#define TEXT_16_TOP          3
+#define TEXT_16_H            12
+#define TEXT_16R_TOP         3    // Regular
+#define TEXT_16R_H           12
+#define TEXT_18_TOP          4
+#define TEXT_18_H            13   // SemiBold the same
+#define TEXT_18_PAREN_H      17   // incl. the parentheses below the baseline
+#define TEXT_22_TOP          5
+#define TEXT_22_H            16   // SemiBold the same
+#define TEXT_22_DESC         4
+#define TEXT_24_TOP          6
+#define TEXT_24_H            17
+#define TEXT_32_TOP          9
+#define TEXT_32_H            22
+#define TEXT_36_TOP          10
+#define TEXT_36_H            25
+#define GOTHIC_24_TOP        10
+#define GOTHIC_24_H          14
+#define GOTHIC_28_TOP        10
+#define GOTHIC_28_H          18
 
 #define LOCATION_Y   0
-#define LOCATION_H   (GOTHIC_18_BOLD_H + 2*PADDING)
+#define LOCATION_H   (TEXT_16_H + 2*PADDING)
 #define CONDITION_Y  (LOCATION_Y + LOCATION_H + 1)
 #define CONDITION_H  (WEATHER_Y - 1 - CONDITION_Y)
 #define WEATHER_Y    (CLOCK_Y - 1 - WEATHER_ICON_SIZE)
 #define CLOCK_Y      (DATE_Y - CLOCK_H)
 #define CLOCK_H      (DIGIT_HEIGHT + 2*TIME_PADDING)
 #define DATE_Y       (BOTTOM_Y - 1 - DATE_H)
-#define DATE_H       (GOTHIC_24_BOLD_H + 2*PADDING)
+#define DATE_H       (TEXT_22_H + TEXT_22_DESC/2 + 2*BIG_PADDING)
 #define BOTTOM_Y     (228 - BOTTOM_H)
-#define BOTTOM_H     (BATTERY_HEIGHT + 2*PADDING) // the sleep text (SLEEP_H) is a bit lower than the battery
+#define BOTTOM_H     (BATTERY_HEIGHT + 2*BIG_PADDING) // the sleep text (TEXT_18_PAREN_H) is a bit lower than the battery
 #define DIGIT_Y      (CLOCK_Y + TIME_PADDING)
-#define BATTERY_Y    (BOTTOM_Y + PADDING)
+#define BATTERY_Y    (BOTTOM_Y + BIG_PADDING)
 #define BATTERY_HEIGHT 19
 #define BATTERY_WIDTH  65 // body without the nub
 #define BATTERY_BORDER 3  // gray border around the charged part
@@ -80,6 +88,8 @@ static const char *s_weekdays[7] = {"Sonntag", "Montag", "Dienstag", "Mittwoch",
 #define COLOR_HEADER_BKGR     GColorBlack
 #define COLOR_CONDITION_TEXT  GColorWhite
 #define COLOR_CONDITION_BKGR  GColorBlack
+#define COLOR_WEATHER_TEXT    GColorWhite      // next rain, min/max temperature (the temperature in the color of get_temperature_color); only the weather icon has the background color of the weather
+#define COLOR_WEATHER_BKGR    GColorBlack
 #define COLOR_DATE_TEXT       GColorOxfordBlue
 #define COLOR_DATE_BKGR       GColorPastelYellow
 #define COLOR_CLOCK           GColorWhite      // time
@@ -90,8 +100,8 @@ static const char *s_weekdays[7] = {"Sonntag", "Montag", "Dienstag", "Mittwoch",
 #define COLOR_BT              GColorVividCerulean
 #define COLOR_BT_BKGR         GColorBlack
 #define COLOR_MOON_DARK       GColorDarkGray
-#define COLOR_WIND            GColorDukeBlue
-#define COLOR_WIND_OUTLINE    GColorBlack
+#define COLOR_WIND            GColorPictonBlue
+#define COLOR_WIND_OUTLINE    GColorWhite
 
 static Window *s_main_window;
 static Layer *s_window_layer;
@@ -99,13 +109,13 @@ static Layer *s_background_layer;
 static Layer *s_digit_layers[4]; // each with an int as data: the digit to paint, -1 = none
 static Layer *s_icon_layer;      // weather icon / moon phase / bluetooth disconnected, plus wind lines
 static Layer *s_rain_layer;      // next rain indicator
+static Layer *s_trains_layer;    // departures over the date and the sleep
+static Layer *s_notif_layer;     // notification icons of the phone instead of the sleep
+static TextLayer *s_temp_layer;
 static TextLayer *s_location_layer;
 static TextLayer *s_last_update_layer;
 static TextLayer *s_condition_layer;
-static GFont s_condition_fonts[4]; // DejaVu Sans Bold 36, 30, 24, 18
-static GFont s_temp_font;
-static GFont s_temp_min_max_font;
-static TextLayer *s_temp_layer;
+static GFont s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36; // see TEXT_*, sb = SemiBold
 static TextLayer *s_temp_min_max_layer;
 static TextLayer *s_date_layer;
 static TextLayer *s_sleep_layer;
@@ -126,6 +136,10 @@ static time_t sun_rise_unix_loc = 0;
 static time_t sun_set_unix_loc  = 0;
 static int warning_location = 0; //0: no warning, 1: red warning (GPS differed from setting), 2: black warning (no GPS)
 static int last_charge_state = 0; //0: discharging; 1: plugged & charging; 2: plugged & full
+static char departures[6*MAX_DEPARTURES + 1]; // see KEY_TRAIN_DEPARTURES
+static uint8_t notif_icons[1 + MAX_NOTIF_ICONS*NOTIF_ICON_BYTES]; // see KEY_NOTIF_ICONS, not persisted (sent again when the watchface is opened)
+static time_t train_last_updated = 0;
+static int train_done = -1; // tm_yday*10 + 1 / 2: the morning / evening of that day is over
 
 // Runtime variables:
 static bool init_done = false;
@@ -134,12 +148,18 @@ static bool bt_connected = true;
 static bool night_mode = false;
 static int moon_phase = 0;
 static bool warning_last_update = false;
+static bool weather_outdated = false; // see WEATHER_HIDE_AFTER_MINUTES
 static int battery_percent = 70;
 static GColor battery_color;
-static int condition_y = 0; // y of the condition text layer, depends on the font which is chosen to fit the text
-static int temp_dy = 0;     // vertical correction of the temperature text layer for the smaller fallback font
+static int condition_y = 0; // y and height of the condition text layer, depend on the font which is chosen to fit the text
+static int condition_h = 30;
+static int temp_dy = 0;     // vertical correction of the temperature layer for the smaller fallback font
+static char temp_text[12];
 static GColor icon_color;
 static GColor icon_bkgr_color;
+static int train_mode = 0; // 0: off, 1: morning (Pressbaum -> Westbahnhof), 2: evening (Westbahnhof -> Pressbaum)
+static bool trains_shown = false; // the departures cover the date and the bottom row
+static time_t train_last_request = 0;
 
 // Screen obstruction (timeline peek): shift of all layers to the top in pixels
 static bool will_be_obstructed = false;
@@ -149,41 +169,17 @@ static int obstruction_shift = 0;
 static GColor get_weather_icon_color(int nr){
 	switch (nr){
 		case 34: return GColorIcterine;
-		case 35: return GColorPictonBlue;
 		case 36: return GColorFromHEX(0x55FFFF); //Rain
-		case 37: return GColorChromeYellow;
-		case 38: return GColorBlueMoon;
 		case 39: return GColorFromHEX(0x55FFFF);
-		case 40: return GColorChromeYellow;
-		case 41: return GColorBlueMoon;
 		case 42: return GColorPictonBlue;
-		case 43: return GColorOrange;
-		case 44: return GColorBlueMoon;
 		case 45: return GColorCadetBlue;
-		case 46: return GColorRajah;
-		case 47: return GColorBlueMoon;
-		case 49: return GColorPastelYellow;
-		case 50: return GColorFromHEX(0x55AAAA);
-		case 51: return GColorSunsetOrange; //hail
 		case 57: return GColorCeleste; //snow
-		case 58: return GColorYellow;
-		case 59: return GColorCyan;
 		case 60: return GColorLightGray; //fog
-		case 61: return GColorPastelYellow;
-		case 62: return GColorCadetBlue;
 		case 63: return GColorLightGray; //haze
-		case 64: return GColorChromeYellow;
-		case 65: return GColorCadetBlue;
 		case 66: return GColorCeleste; //wind
 		case 70: return GColorRed;
-		case 71: return GColorOrange;
-		case 72: return GColorFromHEX(0x0055AA);
 		case 73: return GColorYellow; //sun
-		case 74: return GColorOrange;
-		case 75: return GColorOrange;
 		case 88: return GColorOrange; //tornado
-		case 90: return GColorBabyBlueEyes; //temp_low
-		case 93: return GColorRed; //temp_high
 	}
 	return GColorWhite;
 }
@@ -192,39 +188,17 @@ static GColor get_weather_icon_bkgr_color(int nr){
 	switch (nr){
 		case 33: return GColorVividCerulean; //Cloud
 		case 34: return GColorVividCerulean; //Cloud and Sun
-		case 35: return GColorFromHEX(0x000055);
 		case 36: return GColorFromHEX(0x555555); //Rain
-		case 37: return GColorFromHEX(0x0055AA);
-		case 38: return GColorFromHEX(0x000055);
 		case 39: return GColorFromHEX(0x555555);
-		case 40: return GColorFromHEX(0x0055AA);
-		case 41: return GColorFromHEX(0x000055);
 		case 42: return GColorFromHEX(0x555555);
-		case 43: return GColorFromHEX(0x0055AA);
-		case 44: return GColorFromHEX(0x000055);
 		case 45: return GColorFromHEX(0x555555);
-		case 46: return GColorFromHEX(0x0055AA);
-		case 47: return GColorFromHEX(0x000055);
 		case 48: return GColorElectricBlue;
-		case 49: return GColorFromHEX(0x0055FF);
-		case 50: return GColorFromHEX(0x000055);
-		case 51: return GColorFromHEX(0x0055AA); //hail
 		case 57: return GColorFromHEX(0x555555); //snow
-		case 58: return GColorFromHEX(0x0055AA);
-		case 59: return GColorFromHEX(0x000055);
 		case 60: return GColorWhite; //fog
-		case 61: return GColorFromHEX(0x0055AA);
-		case 62: return GColorWhite;
 		case 63: return GColorWhite; //haze
-		case 64: return GColorWhite;
-		case 65: return GColorWhite;
 		case 66: return GColorFromHEX(0x0055AA); //wind
 		case 73: return GColorFromHEX(0x0055FF); //sun
-		case 74: return GColorFromHEX(0x0055AA);
-		case 75: return GColorFromHEX(0x0055AA);
 		case 88: return GColorFromHEX(0x555555); //tornado
-		case 90: return GColorFromHEX(0x000055); //temp_low
-		case 93: return GColorFromHEX(0xFFFF00); //temp_high
 	}
 	return GColorBlack;
 }
@@ -262,20 +236,22 @@ static void replace_degree(char *s, int size_s){
 
 static void move_layers(void) {
 	MOVE_LAYER(s_background_layer, 0, 0, 200, 228);
-	MOVE_TEXT_LAYER(s_location_layer, 0, TEXT_Y(LOCATION_Y, LOCATION_H, GOTHIC_18_BOLD_TOP, GOTHIC_18_BOLD_H), 150, 24);
-	MOVE_TEXT_LAYER(s_last_update_layer, 151, TEXT_Y(LOCATION_Y, LOCATION_H, GOTHIC_18_TOP, GOTHIC_18_H), 49, 24);
-	MOVE_TEXT_LAYER(s_condition_layer, PADDING, condition_y, 200 - 2*PADDING, 60);
+	MOVE_TEXT_LAYER(s_location_layer, 0, TEXT_Y(LOCATION_Y, LOCATION_H, TEXT_16_TOP, TEXT_16_H), 150, 24);
+	MOVE_TEXT_LAYER(s_last_update_layer, 151, TEXT_Y(LOCATION_Y, LOCATION_H, TEXT_16R_TOP, TEXT_16R_H), 49, 24);
+	MOVE_TEXT_LAYER(s_condition_layer, PADDING, condition_y, 200 - 2*PADDING, condition_h);
 	MOVE_LAYER(s_icon_layer, 0, WEATHER_Y, WEATHER_ICON_SIZE, WEATHER_ICON_SIZE);
 	// temperature and min/max temperature as one block, vertically centered:
 	MOVE_LAYER(s_rain_layer, WEATHER_ICON_SIZE, WEATHER_Y, RAIN_WIDTH, WEATHER_ICON_SIZE);
-	int temp_y = WEATHER_Y + (WEATHER_ICON_SIZE - TEMP_H - PADDING - TEMP_MIN_MAX_H)/2;
-	MOVE_TEXT_LAYER(s_temp_layer, WEATHER_ICON_SIZE + RAIN_WIDTH, temp_y - TEMP_TOP + temp_dy, 200 - WEATHER_ICON_SIZE - RAIN_WIDTH, 50);
-	MOVE_TEXT_LAYER(s_temp_min_max_layer, WEATHER_ICON_SIZE + RAIN_WIDTH, temp_y + TEMP_H + PADDING - TEMP_MIN_MAX_TOP, 200 - WEATHER_ICON_SIZE - RAIN_WIDTH, 40);
+	int temp_y = WEATHER_Y + (WEATHER_ICON_SIZE - TEXT_36_H - 2*PADDING - TEXT_22_H)/2;
+	MOVE_TEXT_LAYER(s_temp_layer, WEATHER_ICON_SIZE + RAIN_WIDTH, temp_y - TEXT_36_TOP + temp_dy, 200 - WEATHER_ICON_SIZE - RAIN_WIDTH, 50);
+	MOVE_TEXT_LAYER(s_temp_min_max_layer, WEATHER_ICON_SIZE + RAIN_WIDTH, temp_y + TEXT_36_H + 2*PADDING - TEXT_22_TOP, 200 - WEATHER_ICON_SIZE - RAIN_WIDTH, 40);
 	for (int i = 0; i < 4; i++) MOVE_LAYER(s_digit_layers[i], TIME_X + i*(DIGIT_WIDTH + DIGIT_GAP) + ((i >= 2) ? COLON_SIZE + DIGIT_GAP : 0), DIGIT_Y, DIGIT_WIDTH, DIGIT_HEIGHT);
 	// the weekdays (except Mittwoch) have a descender, the letters are centered with only half of it:
-	MOVE_TEXT_LAYER(s_date_layer, 0, TEXT_Y(DATE_Y, DATE_H, GOTHIC_24_BOLD_TOP, GOTHIC_24_BOLD_H - GOTHIC_24_BOLD_DESC/2), 200, 30);
-	MOVE_TEXT_LAYER(s_sleep_layer, 0, TEXT_Y(BOTTOM_Y, BOTTOM_H, SLEEP_TOP, SLEEP_H), BATTERY_X - 2, 30);
-	MOVE_TEXT_LAYER(s_battery_text_layer, BATTERY_X, TEXT_Y(BATTERY_Y, BATTERY_HEIGHT, GOTHIC_18_BOLD_TOP, GOTHIC_18_BOLD_H), BATTERY_WIDTH, 24);
+	MOVE_TEXT_LAYER(s_date_layer, 0, TEXT_Y(DATE_Y, DATE_H, TEXT_22_TOP, TEXT_22_H + TEXT_22_DESC/2), 200, 30);
+	MOVE_TEXT_LAYER(s_sleep_layer, 0, TEXT_Y(BOTTOM_Y, BOTTOM_H, TEXT_18_TOP, TEXT_18_PAREN_H), BATTERY_X - 2, 30);
+	MOVE_LAYER(s_notif_layer, 0, BOTTOM_Y + (BOTTOM_H - NOTIF_ICON_SIZE)/2, BATTERY_X - 2, NOTIF_ICON_SIZE);
+	MOVE_LAYER(s_trains_layer, 0, DATE_Y, 200, BOTTOM_Y + BOTTOM_H - DATE_Y);
+	MOVE_TEXT_LAYER(s_battery_text_layer, BATTERY_X, TEXT_Y(BATTERY_Y, BATTERY_HEIGHT, TEXT_16_TOP, TEXT_16_H), BATTERY_WIDTH, 24);
 	MOVE_LAYER(effect_layer_get_layer(s_battery_fill_layer), BATTERY_X + BATTERY_BORDER, BATTERY_Y + BATTERY_BORDER, (BATTERY_WIDTH - 2*BATTERY_BORDER)*battery_percent/100, BATTERY_HEIGHT - 2*BATTERY_BORDER);
 }
 
@@ -289,7 +265,7 @@ static void background_update_proc(Layer *layer, GContext* ctx){
 	graphics_fill_rect(ctx, GRect(151, LOCATION_Y, 49, LOCATION_H), 0, GCornerNone);
 	graphics_context_set_fill_color(ctx, COLOR_CONDITION_BKGR);
 	graphics_fill_rect(ctx, GRect(0, CONDITION_Y, 200, CONDITION_H), 0, GCornerNone);
-	graphics_context_set_fill_color(ctx, bt_connected ? icon_bkgr_color : COLOR_BT_BKGR); // weather info in the color of the icon
+	graphics_context_set_fill_color(ctx, COLOR_WEATHER_BKGR);
 	graphics_fill_rect(ctx, GRect(0, WEATHER_Y, 200, WEATHER_ICON_SIZE), 0, GCornerNone);
 	graphics_context_set_fill_color(ctx, COLOR_DATE_BKGR);
 	graphics_fill_rect(ctx, GRect(0, DATE_Y, 200, DATE_H), 0, GCornerNone);
@@ -327,12 +303,12 @@ static void icon_update_proc(Layer *layer, GContext* ctx) {
 		bt_disconnected_draw(ctx, COLOR_BT, GColorRed);
 		return;
 	}
-	graphics_context_set_fill_color(ctx, icon_bkgr_color);
+	graphics_context_set_fill_color(ctx, weather_outdated ? COLOR_BT_BKGR : icon_bkgr_color);
 	graphics_fill_rect(ctx, layer_get_bounds(layer), 0, GCornerNone);
 	if (night_mode)
-		moon_phase_draw(ctx, moon_phase, icon_color, COLOR_MOON_DARK);
-	else
-		weather_icon_draw(ctx, weather_icon, icon_color, icon_bkgr_color);
+		moon_phase_draw(ctx, moon_phase, icon_color, COLOR_MOON_DARK); // calculated on the watch, also without the weather
+	if (weather_outdated) return;
+	if (!night_mode) weather_icon_draw(ctx, weather_icon, icon_color, icon_bkgr_color);
 
 	// wind lines: 0..4 depending on the wind speed (and at least 3 for the plain wind icon)
 	int lines = (wind_speed >= WIND_LINES_4) ? 4 : (wind_speed >= WIND_LINES_3) ? 3 : (wind_speed >= WIND_LINES_2) ? 2 : (wind_speed >= WIND_LINES_1) ? 1 : 0;
@@ -350,25 +326,83 @@ static void draw_drop(GContext *ctx, GPoint tip, int r, GColor color) {
 	graphics_fill_circle(ctx, c, r);
 }
 
-// next rain: a drop and "3h" (today), "1d" (tomorrow) .. "5d", only the drop if it rains now, a striked through drop if no rain is in sight
+// next rain: a drop and "3h" (today), "1d" (tomorrow), the weekday ("Mo") if later, only the drop if it rains now, a striked through drop if no rain is in sight
 static void rain_update_proc(Layer *layer, GContext* ctx) {
+	static const char *weekdays[7] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 	static char text[16];
-	snprintf(text, sizeof(text), (rain_in >= 100) ? "%dd" : "%dh", (rain_in >= 100) ? rain_in - 100 : rain_in);
+	time_t now = time(NULL);
+	if (rain_in >= 102) snprintf(text, sizeof(text), "%s", weekdays[(localtime(&now)->tm_wday + rain_in - 100) % 7]);
+	else snprintf(text, sizeof(text), (rain_in >= 100) ? "%dd" : "%dh", (rain_in >= 100) ? rain_in - 100 : rain_in);
 	bool with_text = (rain_in > 0);
 	const int r = 9, cx = RAIN_WIDTH/2;
-	int y = (WEATHER_ICON_SIZE - 3*r - (with_text ? PADDING + GOTHIC_28_BOLD_H : 0))/2; // drop and text as one block, vertically centered
+	int y = (WEATHER_ICON_SIZE - 3*r - (with_text ? PADDING + TEXT_24_H : 0))/2; // drop and text as one block, vertically centered
 
 	graphics_context_set_antialiased(ctx, true);
-	draw_drop(ctx, GPoint(cx, y), r, icon_color);
+	draw_drop(ctx, GPoint(cx, y), r, COLOR_WEATHER_TEXT);
 	if (rain_in < 0){
-		draw_drop(ctx, GPoint(cx, y + 4), r - 2, bt_connected ? icon_bkgr_color : COLOR_BT_BKGR);
-		graphics_context_set_stroke_color(ctx, icon_color);
+		draw_drop(ctx, GPoint(cx, y + 4), r - 2, COLOR_WEATHER_BKGR);
+		graphics_context_set_stroke_color(ctx, COLOR_WEATHER_TEXT);
 		graphics_context_set_stroke_width(ctx, 2);
 		graphics_draw_line(ctx, GPoint(cx - r - 2, y + 1), GPoint(cx + r + 2, y + 3*r - 1));
 	}
 	if (with_text){
-		graphics_context_set_text_color(ctx, icon_color);
-		graphics_draw_text(ctx, text, fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD), GRect(0, y + 3*r + PADDING - GOTHIC_28_BOLD_TOP, RAIN_WIDTH, 30), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+		graphics_context_set_text_color(ctx, COLOR_WEATHER_TEXT);
+		graphics_draw_text(ctx, text, s_font_24, GRect(0, y + 3*r + PADDING - TEXT_24_TOP, RAIN_WIDTH, 30), GTextOverflowModeFill, GTextAlignmentCenter, NULL);
+	}
+}
+
+// the notification icons of the phone in the color of the date, as many as fit left of the battery, centered
+static void notif_update_proc(Layer *layer, GContext* ctx) {
+	int n = notif_icons[0], fit = (BATTERY_X - 2 + NOTIF_ICON_GAP)/(NOTIF_ICON_SIZE + NOTIF_ICON_GAP);
+	if (n > fit) n = fit;
+	int x0 = (BATTERY_X - 2 - n*(NOTIF_ICON_SIZE + NOTIF_ICON_GAP) + NOTIF_ICON_GAP)/2;
+	graphics_context_set_stroke_color(ctx, COLOR_DATE_TEXT);
+	for (int i = 0; i < n; i++){
+		const uint8_t *bits = notif_icons + 1 + i*NOTIF_ICON_BYTES;
+		for (int p = 0; p < NOTIF_ICON_SIZE*NOTIF_ICON_SIZE; p++) if (bits[p/8] & (0x80 >> (p%8))) graphics_draw_pixel(ctx, GPoint(x0 + i*(NOTIF_ICON_SIZE + NOTIF_ICON_GAP) + p%NOTIF_ICON_SIZE, p/NOTIF_ICON_SIZE));
+	}
+}
+
+// the next departures, e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through
+static void trains_update_proc(Layer *layer, GContext* ctx) {
+	time_t now = time(NULL);
+	struct tm *now_tm = localtime(&now);
+	int t = now_tm->tm_hour*60 + now_tm->tm_min;
+	const int row_top[2] = {0, BOTTOM_Y - DATE_Y}, row_h[2] = {DATE_H, BOTTOM_H};
+	// the battery is covered, the layer is above it:
+	graphics_context_set_fill_color(ctx, COLOR_DATE_BKGR);
+	graphics_fill_rect(ctx, GRect(0, BOTTOM_Y - DATE_Y, 200, BOTTOM_H), 0, GCornerNone);
+	int count = strlen(departures)/6, d = 0;
+	for (int row = 0; row < 2; row++){
+		char texts[4][12], status[4];
+		int widths[4], n = 0, w = -TRAIN_GAP;
+		bool rex[4];
+		while ((n < 4) && (d < count)){
+			const char *p = departures + 6*d;
+			int hour = (p[0] - '0')*10 + p[1] - '0', min = (p[2] - '0')*10 + p[3] - '0';
+			if (hour*60 + min < t){ d++; continue; } // departed
+			rex[n] = (p[4] == 'X');
+			if (rex[n]) snprintf(texts[n], sizeof(texts[n]), "%d:%02d", hour, min);
+			else snprintf(texts[n], sizeof(texts[n]), "%d:%02d%c", hour, min, (p[4] == 'S') ? 's' : p[4]);
+			widths[n] = graphics_text_layout_get_content_size(texts[n], fonts_get_system_font(rex[n] ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD),GRect(0, 0, 200, 40), GTextOverflowModeFill, GTextAlignmentLeft).w;
+			if (w + TRAIN_GAP + widths[n] > 200) break;
+			w += TRAIN_GAP + widths[n];
+			status[n++] = p[5];
+			d++;
+		}
+		int x = (200 - w)/2;
+		for (int i = 0; i < n; i++){
+			// the digits are vertically centered in the row
+			int top = rex[i] ? GOTHIC_28_TOP : GOTHIC_24_TOP, h = rex[i] ? GOTHIC_28_H : GOTHIC_24_H, y = TEXT_Y(row_top[row], row_h[row], top, h);
+			graphics_context_set_text_color(ctx, (status[i] == 'D') ? GColorRed : (status[i] == 'C') ? GColorDarkGray : COLOR_DATE_TEXT);
+			graphics_draw_text(ctx, texts[i], fonts_get_system_font(rex[i] ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD),GRect(x, y, widths[i] + 4, 40), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+			if (status[i] == 'C'){
+				graphics_context_set_stroke_color(ctx, GColorDarkGray);
+				graphics_context_set_stroke_width(ctx, 2);
+				graphics_draw_line(ctx, GPoint(x, y + top + h/2), GPoint(x + widths[i], y + top + h/2));
+			}
+			x += widths[i] + TRAIN_GAP;
+		}
 	}
 }
 
@@ -387,6 +421,9 @@ static void load_data(void) {
 	if (persist_exists(KEY_SUN_SET_UNIX)) sun_set_unix_loc = (time_t)persist_read_int(KEY_SUN_SET_UNIX);
 	if (persist_exists(KEY_WARN_LOCATION)) warning_location = persist_read_int(KEY_WARN_LOCATION);
 	if (persist_exists(KEY_BTY_LAST_STATE)) last_charge_state = persist_read_int(KEY_BTY_LAST_STATE);
+	if (persist_exists(KEY_TRAIN_DEPARTURES)) persist_read_string(KEY_TRAIN_DEPARTURES, departures, sizeof(departures));
+	if (persist_exists(KEY_TRAIN_LAST_UPDATE)) train_last_updated = (time_t)persist_read_int(KEY_TRAIN_LAST_UPDATE);
+	if (persist_exists(KEY_TRAIN_DONE)) train_done = persist_read_int(KEY_TRAIN_DONE);
 }
 
 static void save_data(void) {
@@ -403,9 +440,12 @@ static void save_data(void) {
 	persist_write_int(KEY_SUN_SET_UNIX, (int)sun_set_unix_loc);
 	persist_write_int(KEY_WARN_LOCATION, warning_location);
 	persist_write_int(KEY_BTY_LAST_STATE, last_charge_state);
+	persist_write_string(KEY_TRAIN_DEPARTURES, departures);
+	persist_write_int(KEY_TRAIN_LAST_UPDATE, (int)train_last_updated);
+	persist_write_int(KEY_TRAIN_DONE, train_done);
 }
 
-// time since the last weather update, red if older than the update interval
+// time since the last weather update, red if older than the update interval; the weather is hidden if it is older than WEATHER_HIDE_AFTER_MINUTES
 static void display_last_updated(void) {
 	static char buffer[16];
 	time_t age = time(NULL) - phone_last_updated;
@@ -424,34 +464,42 @@ static void display_last_updated(void) {
 		warning_last_update = warning;
 		layer_mark_dirty(s_background_layer);
 	}
+	bool outdated = (phone_last_updated == 0) || (age > WEATHER_HIDE_AFTER_MINUTES*60);
+	if (outdated != weather_outdated){
+		weather_outdated = outdated;
+		layer_set_hidden(text_layer_get_layer(s_condition_layer), outdated);
+		layer_set_hidden(text_layer_get_layer(s_temp_layer), outdated);
+		layer_set_hidden(text_layer_get_layer(s_temp_min_max_layer), outdated);
+		layer_set_hidden(s_rain_layer, outdated);
+		layer_mark_dirty(s_icon_layer);
+		layer_mark_dirty(s_background_layer);
+	}
 }
 
 static void display_weather(void) {
-	static char temp_buffer[12];
-	snprintf(temp_buffer, sizeof(temp_buffer), "%d°C", weather_temp);
-	text_layer_set_text(s_temp_layer, temp_buffer);
-	// e.g. "-12°C" does not fit beside the rain indicator in size 36, then the condition font of size 30 is used
-	bool fits = graphics_text_layout_get_content_size(temp_buffer, s_temp_font, GRect(0, 0, 500, 60), GTextOverflowModeFill, GTextAlignmentLeft).w <= 200 - WEATHER_ICON_SIZE - RAIN_WIDTH;
-	text_layer_set_font(s_temp_layer, fits ? s_temp_font : s_condition_fonts[1]);
-	temp_dy = fits ? 0 : TEMP_TOP - CONDITION_30_TOP + 2;
+	snprintf(temp_text, sizeof(temp_text), "%d°C", weather_temp);
+	// e.g. "-12°C" does not fit beside the rain indicator in size 36, then size 32 is used
+	bool fits = graphics_text_layout_get_content_size(temp_text, s_font_36, GRect(0, 0, 500, 60), GTextOverflowModeFill, GTextAlignmentLeft).w <= 200 - WEATHER_ICON_SIZE - RAIN_WIDTH;
+	text_layer_set_font(s_temp_layer, fits ? s_font_36 : s_font_32);
+	text_layer_set_text(s_temp_layer, temp_text);
+	text_layer_set_text_color(s_temp_layer, get_temperature_color(weather_temp));
+	temp_dy = fits ? 0 : TEXT_36_TOP - TEXT_32_TOP + (TEXT_36_H - TEXT_32_H)/2;
 	text_layer_set_text(s_temp_min_max_layer, temp_min_max);
 
-	// weather condition: the biggest font in which it fits on one line, else two lines of the smallest one
-	static const int tops[4] = {CONDITION_36_TOP, CONDITION_30_TOP, CONDITION_24_TOP, CONDITION_18_TOP};
-	static const int heights[4] = {CONDITION_36_H, CONDITION_30_H, CONDITION_24_H, CONDITION_18_H};
-	static const int sizes[4] = {36, 30, 24, 18};
-	int f = 0, h = 0;
-	bool descenders = (strpbrk(weather_condition, "gjpqy") != NULL);
-	for (f = 0; f < 4; f++){
-		h = graphics_text_layout_get_content_size(weather_condition, s_condition_fonts[f], GRect(0, 0, 200 - 2*PADDING, 100), GTextOverflowModeWordWrap, GTextAlignmentCenter).h;
-		bool fits_height = (heights[f] - (descenders ? 0 : sizes[f]/4) <= CONDITION_H - 2*PADDING);
-		if (((h < sizes[f]*3/2) && fits_height) || (f == 3)) break; // a single line
+	// weather condition: in the font of the date, or smaller if it does not fit on one line (in the smallest one cut with "..."); the letters are centered without the descenders
+	GFont fonts[3] = {s_font_22, s_font_18, s_font_14};
+	static const int tops[3] = {TEXT_22_TOP, TEXT_18_TOP, TEXT_14_TOP};
+	static const int heights[3] = {TEXT_22_H, TEXT_18_H, TEXT_14_H};
+	int f = 0;
+	GSize size;
+	for (f = 0; f < 3; f++){
+		size = graphics_text_layout_get_content_size(weather_condition, fonts[f], GRect(0, 0, 1000, 100), GTextOverflowModeFill, GTextAlignmentCenter);
+		if ((size.w <= 200 - 2*PADDING) || (f == 2)) break;
 	}
-	text_layer_set_font(s_condition_layer, s_condition_fonts[f]);
+	text_layer_set_font(s_condition_layer, fonts[f]);
 	text_layer_set_text(s_condition_layer, weather_condition);
-	int block = heights[f] + ((h < sizes[f]*3/2) ? 0 : CONDITION_18_PITCH);
-	if (!descenders) block -= sizes[f]/4; // center the letters only
-	condition_y = TEXT_Y(CONDITION_Y, CONDITION_H, tops[f], block);
+	condition_y = TEXT_Y(CONDITION_Y, CONDITION_H, tops[f], heights[f]);
+	condition_h = size.h + 4; // a single line
 	move_layers();
 	text_layer_set_text(s_location_layer, location_name);
 	display_last_updated();
@@ -468,18 +516,57 @@ static void update_icon(void) {
 	moon_phase = calc_moonphase_number(location_latitude/1E6);
 	icon_color = night_mode ? GColorWhite : get_weather_icon_color(weather_icon);
 	icon_bkgr_color = night_mode ? GColorBlack : get_weather_icon_bkgr_color(weather_icon);
-	text_layer_set_text_color(s_temp_layer, get_temperature_color(weather_temp));
-	text_layer_set_text_color(s_temp_min_max_layer, icon_color);
 	layer_mark_dirty(s_icon_layer);
 	layer_mark_dirty(s_rain_layer);
 	layer_mark_dirty(s_background_layer);
 }
 
-static void request_weather(void) {
+// to the JS: the weather (key 0) or the departures (KEY_TRAIN_REQUEST); false if the outbox is busy, then it is tried again in the next minute
+static bool send_request(uint32_t key, uint8_t value) {
 	DictionaryIterator *iter;
-	app_message_outbox_begin(&iter);
-	dict_write_uint8(iter, 0, 0);
-	app_message_outbox_send();
+	if (app_message_outbox_begin(&iter) != APP_MSG_OK) return false;
+	dict_write_uint8(iter, key, value);
+	return app_message_outbox_send() == APP_MSG_OK;
+}
+
+// the notification icons replace the sleep if there are any; the departures cover both
+static void update_bottom_row(void) {
+	layer_set_hidden(text_layer_get_layer(s_sleep_layer), trains_shown || (notif_icons[0] > 0));
+	layer_set_hidden(s_notif_layer, notif_icons[0] == 0);
+	layer_mark_dirty(s_notif_layer);
+}
+
+// the departures replace the date and the sleep on the train days, from the start time until the JS reports the morning / evening as over, or the end time
+static void update_train_mode(void) {
+	time_t now = time(NULL);
+	struct tm now_tm = *localtime(&now);
+	int t = now_tm.tm_hour*60 + now_tm.tm_min;
+	int mode = 0;
+	if (TRAIN_WEEKDAYS & (1 << now_tm.tm_wday)){
+		if ((t >= TRAIN_MORNING_START) && (t < TRAIN_MORNING_END)) mode = 1;
+		if ((t >= TRAIN_EVENING_START) && (t < TRAIN_EVENING_END)) mode = 2;
+	}
+	if (train_done == now_tm.tm_yday*10 + mode) mode = 0;
+	// departures from before the start of this morning / evening (e.g. of yesterday) are dropped:
+	int start = (mode == 1) ? TRAIN_MORNING_START : TRAIN_EVENING_START;
+	if (mode && (train_last_updated < now - (t - start)*60 - now_tm.tm_sec)) departures[0] = 0;
+	if (mode != train_mode){
+		train_mode = mode;
+		train_last_request = 0; // request the departures right away
+	}
+	// only when there are departures still to come, else (e.g. before the first ones are received) the date and the sleep stay
+	bool shown = false;
+	for (int d = 0; mode && !shown && (d < (int)strlen(departures)/6); d++){
+		const char *p = departures + 6*d;
+		shown = ((p[0] - '0')*600 + (p[1] - '0')*60 + (p[2] - '0')*10 + p[3] - '0' >= t);
+	}
+	if (shown != trains_shown){
+		trains_shown = shown;
+		layer_set_hidden(text_layer_get_layer(s_date_layer), shown);
+		update_bottom_row();
+		layer_set_hidden(s_trains_layer, !shown);
+	}
+	layer_mark_dirty(s_trains_layer);
 }
 
 static void handle_tick(struct tm* tick_time, TimeUnits units_changed) {
@@ -507,11 +594,10 @@ static void handle_tick(struct tm* tick_time, TimeUnits units_changed) {
 
 	update_icon();
 	display_last_updated();
+	update_train_mode();
 
-	if (init_done && (do_update_weather || (time(NULL) - phone_last_updated >= WEATHER_UPDATE_INTERVAL_MINUTES*60-60))){
-		do_update_weather = false;
-		request_weather();
-	}
+	if (init_done && (do_update_weather || (time(NULL) - phone_last_updated >= WEATHER_UPDATE_INTERVAL_MINUTES*60-60)) && send_request(0, 0)) do_update_weather = false;
+	if (init_done && train_mode && (time(NULL) - train_last_request >= TRAIN_UPDATE_INTERVAL_MINUTES*60) && send_request(KEY_TRAIN_REQUEST, train_mode)) train_last_request = time(NULL);
 }
 
 static void handle_battery(BatteryChargeState charge_state) {
@@ -543,6 +629,10 @@ static void handle_bluetooth(bool connected) {
 	}
 	if (connected && !bt_connected && init_done) do_update_weather = true;
 	bt_connected = connected;
+	if (!connected){ // the icons would be outdated
+		notif_icons[0] = 0;
+		update_bottom_row();
+	}
 	layer_mark_dirty(s_icon_layer);
 	layer_mark_dirty(s_background_layer);
 }
@@ -582,11 +672,29 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 			case KEY_WEATHER_STRING_2:
 				snprintf(weather_condition, sizeof(weather_condition), "%s", t->value->cstring);
 				break;
+			case KEY_TRAIN_DEPARTURES:
+				snprintf(departures, sizeof(departures), "%s", t->value->cstring);
+				train_last_updated = time(NULL);
+				break;
+			case KEY_NOTIF_ICONS: {
+				memset(notif_icons, 0, sizeof(notif_icons));
+				memcpy(notif_icons, t->value->data, (t->length < sizeof(notif_icons)) ? t->length : sizeof(notif_icons));
+				int complete = (t->length - 1)/NOTIF_ICON_BYTES;
+				if (notif_icons[0] > complete) notif_icons[0] = complete;
+				update_bottom_row();
+				break;
+			}
+			case KEY_TRAIN_DONE: {
+				time_t now = time(NULL);
+				train_done = localtime(&now)->tm_yday*10 + (int)t->value->int32;
+				break;
+			}
 		}
 	}
 	save_data();
 	display_weather();
 	update_icon();
+	update_train_mode();
 }
 
 static void unobstructed_area_will_change(GRect final_unobstructed_area, void *context) {
@@ -637,26 +745,41 @@ static void main_window_load(Window *window) {
 	layer_set_update_proc(s_rain_layer, rain_update_proc);
 	layer_add_child(s_window_layer, s_rain_layer);
 
-	s_condition_fonts[0] = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_CONDITION_36));
-	s_condition_fonts[1] = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_CONDITION_30));
-	s_condition_fonts[2] = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_CONDITION_24));
-	s_condition_fonts[3] = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_CONDITION_18));
-	s_temp_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEMP_36));
-	s_temp_min_max_font = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEMP_MIN_MAX_22));
+	s_font_14  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_14));
+	s_font_16  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_16));
+	s_font_16r = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_REGULAR_16));
+	s_font_18  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_18));
+	s_font_18sb = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_SEMIBOLD_18));
+	s_font_22  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_22));
+	s_font_22sb = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_SEMIBOLD_22));
+	s_font_24  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_24));
+	s_font_32  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_32));
+	s_font_36  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_36));
 
-	s_location_layer     = create_text_layer(fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), COLOR_HEADER_TEXT);
-	s_last_update_layer  = create_text_layer(fonts_get_system_font(FONT_KEY_GOTHIC_18), COLOR_HEADER_TEXT);
-	s_condition_layer    = create_text_layer(s_condition_fonts[0], COLOR_CONDITION_TEXT);
-	s_temp_layer         = create_text_layer(s_temp_font, GColorWhite);
-	s_temp_min_max_layer = create_text_layer(s_temp_min_max_font, GColorWhite);
-	s_date_layer         = create_text_layer(fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), COLOR_DATE_TEXT);
-	s_sleep_layer        = create_text_layer(fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), COLOR_DATE_TEXT);
-	s_battery_text_layer = create_text_layer(fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD), GColorIslamicGreen);
+	s_temp_layer         = create_text_layer(s_font_36, COLOR_WEATHER_TEXT);
+	s_location_layer    = create_text_layer(s_font_16, COLOR_HEADER_TEXT);
+	s_last_update_layer  = create_text_layer(s_font_16r, COLOR_HEADER_TEXT);
+	s_condition_layer    = create_text_layer(s_font_22, COLOR_CONDITION_TEXT);
+	s_temp_min_max_layer = create_text_layer(s_font_22, COLOR_WEATHER_TEXT);
+	s_date_layer         = create_text_layer(s_font_22sb, COLOR_DATE_TEXT);
+	s_sleep_layer        = create_text_layer(s_font_18sb, COLOR_DATE_TEXT);
+	s_battery_text_layer = create_text_layer(s_font_16, GColorIslamicGreen);
+	text_layer_set_overflow_mode(s_condition_layer, GTextOverflowModeTrailingEllipsis);
 
 	// after the battery text, so that the effect inverts it too:
 	s_battery_fill_layer = effect_layer_create(GRectZero);
 	effect_layer_add_effect(s_battery_fill_layer, effect_invert_color, (void *)0b00000000); //use global inverter color
 	layer_add_child(s_window_layer, effect_layer_get_layer(s_battery_fill_layer));
+
+	s_notif_layer = layer_create(GRectZero);
+	layer_set_update_proc(s_notif_layer, notif_update_proc);
+	layer_set_hidden(s_notif_layer, true);
+	layer_add_child(s_window_layer, s_notif_layer);
+
+	s_trains_layer = layer_create(GRectZero);
+	layer_set_update_proc(s_trains_layer, trains_update_proc);
+	layer_set_hidden(s_trains_layer, true);
+	layer_add_child(s_window_layer, s_trains_layer);
 
 	move_layers();
 	display_weather();
@@ -691,18 +814,19 @@ static void main_window_unload(Window *window) {
 	for (int i = 0; i < 4; i++) layer_destroy(s_digit_layers[i]);
 	layer_destroy(s_icon_layer);
 	layer_destroy(s_rain_layer);
+	layer_destroy(s_trains_layer);
+	layer_destroy(s_notif_layer);
 	effect_layer_destroy(s_battery_fill_layer);
+	text_layer_destroy(s_temp_layer);
 	text_layer_destroy(s_location_layer);
 	text_layer_destroy(s_last_update_layer);
 	text_layer_destroy(s_condition_layer);
-	text_layer_destroy(s_temp_layer);
 	text_layer_destroy(s_temp_min_max_layer);
 	text_layer_destroy(s_date_layer);
 	text_layer_destroy(s_sleep_layer);
 	text_layer_destroy(s_battery_text_layer);
-	for (int i = 0; i < 4; i++) fonts_unload_custom_font(s_condition_fonts[i]);
-	fonts_unload_custom_font(s_temp_font);
-	fonts_unload_custom_font(s_temp_min_max_font);
+	GFont fonts[10] = {s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36};
+	for (int i = 0; i < 10; i++) fonts_unload_custom_font(fonts[i]);
 }
 
 int main(void) {

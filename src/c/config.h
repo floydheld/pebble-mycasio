@@ -8,6 +8,16 @@
 #define VIBE_ON_HOUR        0 // vibrate every full hour
 
 #define WEATHER_UPDATE_INTERVAL_MINUTES 30
+#define WEATHER_HIDE_AFTER_MINUTES      120 // the weather is hidden when it is older, e.g. without bluetooth for that long (the location and the age stay)
+
+// ÖBB departures in the two bottom rows (instead of the date and the sleep) on the weekdays of TRAIN_WEEKDAYS (bit 0 = Sunday .. bit 6 = Saturday), times in minutes of the day
+// mornings Pressbaum -> Wien Westbahnhof until leaving the area of Pressbaum, evenings Wien Westbahnhof -> Pressbaum until arriving there (area and stations: see index.js)
+#define TRAIN_WEEKDAYS      0b0010110 // Monday, Tuesday, Thursday
+#define TRAIN_MORNING_START (6*60 + 30)
+#define TRAIN_MORNING_END   (10*60)   // at the latest, e.g. without a position from the phone
+#define TRAIN_EVENING_START (16*60)
+#define TRAIN_EVENING_END   (20*60)
+#define TRAIN_UPDATE_INTERVAL_MINUTES 5
 
 // wind speed in km/h from which on 1, 2, 3, 4 wind lines are drawn over the weather icon (Beaufort 3, 4, 6, 8)
 #define WIND_LINES_1 12

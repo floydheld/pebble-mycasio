@@ -1,9 +1,8 @@
 #include "weather_icons.h"
 
 // Vector weather icons replacing the Climacons font (whose glyphs are limited in size by the firmware).
-// Icon codes are the Climacons characters, sent by the JS:
-//   '!'..'A': groups of 3 (plain, _day, _night): cloud, rain, showers, downpour, drizzle, sleet, hail, flurries, snow, fog, haze
-//   'B' wind, 'C'..'E' wind_cloud, 'F'..'H' lightning, 'I' sun, 'N' moon, 'X' tornado, 'Y'..'^' thermometer
+// Icon codes are the Climacons characters, sent by the JS: '!' cloud, '"' cloud_day, then the first (plain) icons of the groups of 3 from '!' on:
+//   '$' rain, "'" showers, '*' downpour, '-' drizzle, '0' sleet, '9' snow, '<' fog, '?' haze; and 'B' wind, 'F' lightning, 'I' sun, 'X' tornado
 
 // The icons are designed for a 72x72 box, S() scales a length and P() a point of that design to WEATHER_ICON_SIZE.
 #define S(v) ((v) * WEATHER_ICON_SIZE / 72)
@@ -14,7 +13,7 @@ static GPoint polar(GPoint c, int r, int32_t angle) {
 	return GPoint(c.x + sin_lookup(angle) * S(r) / TRIG_MAX_RATIO, c.y - cos_lookup(angle) * S(r) / TRIG_MAX_RATIO);
 }
 
-// cloud spans x 10..64 and y 13+dy..50+dy; grow makes it bigger, used to cut a gap into a sun/moon behind it
+// cloud spans x 10..64 and y 13+dy..50+dy; grow makes it bigger, used to cut a gap into a sun behind it
 static void draw_cloud(GContext *ctx, int dy, int grow, GColor color) {
 	graphics_context_set_fill_color(ctx, color);
 	graphics_fill_circle(ctx, P(22, 38+dy), S(12+grow));
@@ -32,13 +31,6 @@ static void draw_sun(GContext *ctx, GPoint c, int r, int ray, GColor color) {
 		int32_t a = TRIG_MAX_ANGLE * i / 8;
 		graphics_draw_line(ctx, polar(c, r+4, a), polar(c, r+4+ray, a));
 	}
-}
-
-static void draw_crescent(GContext *ctx, GPoint c, int r, GColor color, GColor bg) {
-	graphics_context_set_fill_color(ctx, color);
-	graphics_fill_circle(ctx, c, S(r));
-	graphics_context_set_fill_color(ctx, bg);
-	graphics_fill_circle(ctx, GPoint(c.x + S(r/2), c.y - S(r/3)), S(r*5/6));
 }
 
 static void draw_snowflake(GContext *ctx, GPoint c, int s) {
@@ -59,10 +51,6 @@ void weather_icon_draw(GContext *ctx, int icon, GColor fg, GColor bg) {
 		draw_sun(ctx, P(36, 36), 15, 9, fg);
 		return;
 	}
-	if (icon == 'N') {
-		draw_crescent(ctx, P(32, 38), 26, fg, bg);
-		return;
-	}
 	if (icon == 'X') { // tornado: horizontal lines getting narrower downwards
 		graphics_context_set_stroke_width(ctx, 4);
 		for (int i = 0; i < 6; i++) {
@@ -71,26 +59,9 @@ void weather_icon_draw(GContext *ctx, int icon, GColor fg, GColor bg) {
 		}
 		return;
 	}
-	if ((icon >= 'Y') && (icon <= '^')) { // thermometer, filled according to temp_low ('Z') .. temp_high (']')
-		int level = (icon == 'Z') ? 40 : (icon == ']') ? 14 : 28;
-		graphics_draw_round_rect(ctx, GRect(S(29), S(6), S(14), S(48)), S(7));
-		graphics_fill_rect(ctx, GRect(S(33), S(level), S(6), S(50-level)), 0, GCornerNone);
-		graphics_fill_circle(ctx, P(36, 57), S(11));
-		return;
-	}
-
-	// groups of 3 icons (plain, _day, _night):
-	int group = 0, variant = 0;
-	if ((icon >= '!') && (icon <= 'A')) {
-		group = (icon - '!') / 3;
-		variant = (icon - '!') % 3;
-	} else if ((icon >= 'C') && (icon <= 'H')) {
-		group = 11 + (icon - 'C') / 3;
-		variant = (icon - 'C') % 3;
-	}
-
-	if (group == 10) { // haze: sun or moon above horizontal lines
-		if (variant == 2) draw_crescent(ctx, P(34, 26), 16, fg, bg); else draw_sun(ctx, P(36, 24), 11, 6, fg);
+	int group = (icon == 'F') ? 12 : (icon - '!') / 3;
+	if (group == 10) { // haze: sun above horizontal lines
+		draw_sun(ctx, P(36, 24), 11, 6, fg);
 		graphics_context_set_stroke_color(ctx, fg);
 		graphics_context_set_stroke_width(ctx, 3);
 		graphics_draw_line(ctx, P(12, 50), P(60, 50));
@@ -99,11 +70,10 @@ void weather_icon_draw(GContext *ctx, int icon, GColor fg, GColor bg) {
 		return;
 	}
 
-	bool precip = (group != 0) && (group != 11);
-	int dy = precip ? (variant ? -1 : -3) : (variant ? 8 : 4);
-	if (variant) { // small sun or moon behind the cloud, with a gap around the cloud
-		GPoint c = precip ? P(54, 15) : P(52, 18);
-		if (variant == 1) draw_sun(ctx, c, 9, 5, fg); else draw_crescent(ctx, c, 12, fg, bg);
+	bool precip = (group != 0);
+	int dy = precip ? -3 : ((icon == '"') ? 8 : 4);
+	if (icon == '"') { // small sun behind the cloud, with a gap around the cloud
+		draw_sun(ctx, P(52, 18), 9, 5, fg);
 		draw_cloud(ctx, dy, 3, bg);
 	}
 	draw_cloud(ctx, dy, 0, fg);
@@ -141,15 +111,6 @@ void weather_icon_draw(GContext *ctx, int icon, GColor fg, GColor bg) {
 					graphics_fill_circle(ctx, P(xs[i]-2, y0+11), S(3));
 				}
 			}
-			break;
-		case 6: // hail
-			for (int i = 0; i < 3; i++) graphics_fill_circle(ctx, P(20 + i*16, y0+3), S(4));
-			for (int i = 0; i < 2; i++) graphics_fill_circle(ctx, P(28 + i*16, y0+12), S(4));
-			break;
-		case 7: // flurries
-			graphics_context_set_stroke_width(ctx, 2);
-			draw_snowflake(ctx, P(26, y0+7), 6);
-			draw_snowflake(ctx, P(48, y0+7), 6);
 			break;
 		case 8: // snow
 			graphics_context_set_stroke_width(ctx, 2);
@@ -190,17 +151,21 @@ void moon_phase_draw(GContext *ctx, int phase, GColor lit, GColor dark) {
 }
 
 void wind_lines_draw(GContext *ctx, int count, GColor color, GColor outline) {
+	// start and length of each line (in the 72px design), so that the lines are differently wide and offset to each other
+	static const int starts[4] = {4, 0, 16, 6}, lengths[4] = {44, 30, 38, 32}; // ends at 48, 30, 54, 38: the curls of neighbouring lines are apart
 	graphics_context_set_antialiased(ctx, true);
 	// first all outlines, then the lines
 	for (int pass = 0; pass < 2; pass++) {
 		graphics_context_set_stroke_color(ctx, pass ? color : outline);
-		graphics_context_set_stroke_width(ctx, pass ? 1 : 3);
+		graphics_context_set_stroke_width(ctx, pass ? 2 : 4);
 		for (int i = 0; i < count; i++) {
 			// one smooth wave period, ending in a round curl upwards
 			GPoint pts[40];
 			int n = 0;
-			int y = WEATHER_ICON_SIZE * (i+1) / (count+1), x0 = S(4 + (i % 2) * 6), len = S(44), r = S(7);
-			for (int k = 0; k <= 24; k++) pts[n++] = GPoint(x0 + k*len/24, y - S(5) * sin_lookup(TRIG_MAX_ANGLE * k / 24) / TRIG_MAX_RATIO);
+			// curl and wave smaller with more lines, so that they do not touch the line above
+			int gap = WEATHER_ICON_SIZE / (count+1), y = WEATHER_ICON_SIZE * (i+1) / (count+1), x0 = S(starts[i]), len = S(lengths[i]);
+			int r = (S(7) < 2*gap/5) ? S(7) : 2*gap/5, amp = (S(5) < gap/4) ? S(5) : gap/4;
+			for (int k = 0; k <= 24; k++) pts[n++] = GPoint(x0 + k*len/24, y - amp * sin_lookup(TRIG_MAX_ANGLE * k / 24) / TRIG_MAX_RATIO);
 			GPoint c = GPoint(x0 + len, y-r);
 			for (int k = 1; k <= 12; k++) {
 				int32_t a = TRIG_MAX_ANGLE/2 - k * TRIG_MAX_ANGLE * 3 / 48; // from the bottom of the circle upwards, 22.5 degree steps, 270 degree in total

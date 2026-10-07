@@ -1,6 +1,5 @@
 #include <pebble.h>
 #include "mooncalc.h"
-//#include "config.h"
   
 /** 
  *  Given a presumably UTC time, return the astronomical julian day.
@@ -49,9 +48,4 @@ int calc_moonphase_number(double latitude)
     moonphase_number = 28 - moonphase_number;
   
   return moonphase_number;
-  
-  //static int i = 0;
-  //i++;
-  //if (i > 27) i = 0;
-  //return i;
 }

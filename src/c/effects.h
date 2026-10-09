@@ -3,8 +3,7 @@
 
 typedef void effect_cb(GContext* ctx, GRect position, void* param);
 
-// inverter effect with a given color for the bright color (switch between black / color).
+// inverter effect: the background color becomes the given color, any other color the background color.
 // Added by FG
+// Parameter: uint8_t[2] = {color, background color} (argb & 0b00111111), can be changed later
 effect_cb effect_invert_color;
-uint8_t GlobalInverterColor; //this color is used if effect was added with parameter of 0. In this way, the color can be changed later.
-uint8_t GlobalBkgColor;

@@ -15,19 +15,15 @@ uint8_t get_pixel(uint8_t *bitmap_data, int bytes_per_row, int y, int x) {
 }
  
 
-// inverter effect (black (or given color) -> given color -> black -> ...).
+// inverter effect (background color -> given color, any other color -> background color).
 void effect_invert_color(GContext* ctx,  GRect position, void* param) {
   //capturing framebuffer bitmap
   GBitmap *fb = graphics_capture_frame_buffer(ctx);
   uint8_t *bitmap_data =  gbitmap_get_data(fb);
   int bytes_per_row = gbitmap_get_bytes_per_row(fb);
 
-  uint8_t InverterColor = (uintptr_t)param;
-  uint8_t BkgColor = 0;
-  if (InverterColor == 0){
-    InverterColor = GlobalInverterColor;
-    BkgColor = GlobalBkgColor;
-  }
+  uint8_t InverterColor = ((uint8_t *)param)[0];
+  uint8_t BkgColor = ((uint8_t *)param)[1];
   
   for (int y = 0; y < position.size.h; y++)
      for (int x = 0; x < position.size.w; x++)

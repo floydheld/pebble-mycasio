@@ -17,3 +17,4 @@
 #define KEY_TRAIN_REQUEST     122 // to the JS: departures of the morning (1) / evening (2)
 #define KEY_TRAIN_LAST_UPDATE 123 // persistent only
 #define KEY_NOTIF_ICONS       130 // from the Android companion app (android/): count, then per icon NOTIF_ICON_SIZE x NOTIF_ICON_SIZE bits row by row (most significant bit first), 1 = opaque
+#define KEY_PHONE_BATTERY     131 // from the Android companion app: battery level of the phone in percent

@@ -35,7 +35,8 @@
             "KEY_TRAIN_DEPARTURES": 120,
             "KEY_TRAIN_DONE": 121,
             "KEY_TRAIN_REQUEST": 122,
-            "KEY_NOTIF_ICONS": 130
+            "KEY_NOTIF_ICONS": 130,
+            "KEY_PHONE_BATTERY": 131
         },
         "projectType": "native",
         "resources": {

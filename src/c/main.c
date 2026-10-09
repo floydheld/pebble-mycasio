@@ -12,12 +12,12 @@ pebble build
 pebble install --phone <ip address>
 */
 // Pebble Time 2 (emery, 200x228)
-// Rows from top to bottom: location | last update, weather condition, weather icon | next rain | temperature + min/max temperature, time, date, sleep (deep sleep) | battery
+// Rows from top to bottom: location | last update, weather condition, weather icon | next rain | temperature + min/max temperature, time, date | battery, sleep (deep sleep) | phone battery
 // At the times of the trains (config.h) the date and the sleep are replaced by the ÖBB departures.
-// Each row is as high as its content plus PADDING above and below (the clock, the date and the bottom row 2px more). The weather condition takes the remaining space, which is the height of the date row.
+// Each row is as high as its content plus PADDING above and below (the clock and the date 2px more; the bottom row is as high as the notification icons). The weather condition takes the remaining space, which is the height of the date row.
 // Rows with the same background are separated by a 1px line.
 #define PADDING 2
-#define BIG_PADDING  (PADDING + 2) // the date and the bottom row
+#define BIG_PADDING  (PADDING + 2) // the date
 #define TIME_PADDING (PADDING + 4) // the time
 
 #define DIGIT_WIDTH     40
@@ -70,9 +70,9 @@ pebble install --phone <ip address>
 #define DATE_Y       (BOTTOM_Y - 1 - DATE_H)
 #define DATE_H       (TEXT_22_H + TEXT_22_DESC/2 + 2*BIG_PADDING)
 #define BOTTOM_Y     (228 - BOTTOM_H)
-#define BOTTOM_H     (BATTERY_HEIGHT + 2*BIG_PADDING) // the sleep text (TEXT_18_PAREN_H) is a bit lower than the battery
+#define BOTTOM_H     NOTIF_ICON_SIZE
 #define DIGIT_Y      (CLOCK_Y + TIME_PADDING)
-#define BATTERY_Y    (BOTTOM_Y + BIG_PADDING)
+#define BATTERY_Y(i) ((i) ? BOTTOM_Y + (BOTTOM_H - BATTERY_HEIGHT)/2 : DATE_Y + (DATE_H - BATTERY_HEIGHT)/2) // of the watch (0) in the date row, of the phone (1) in the bottom row
 #define BATTERY_HEIGHT 19
 #define BATTERY_WIDTH  65 // body without the nub
 #define BATTERY_BORDER 3  // gray border around the charged part
@@ -81,7 +81,7 @@ pebble install --phone <ip address>
 // y of a text layer, so that its glyphs (top offset, height) are vertically centered in the row (row_y, row_h)
 #define TEXT_Y(row_y, row_h, top, h) ((row_y) + ((row_h) - (h))/2 - (top))
 
-static const char *s_weekdays[7] = {"Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"};
+static const char *s_weekdays[7] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 
 // Colors:
 #define COLOR_HEADER_TEXT     GColorWhite      // location, last update
@@ -119,8 +119,8 @@ static GFont s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22
 static TextLayer *s_temp_min_max_layer;
 static TextLayer *s_date_layer;
 static TextLayer *s_sleep_layer;
-static TextLayer *s_battery_text_layer;
-static EffectLayer *s_battery_fill_layer; // inverts the battery (incl. its text) according to the charge level
+static TextLayer *s_battery_text_layers[2];   // of the watch (0) and the phone (1)
+static EffectLayer *s_battery_fill_layers[2]; // invert the battery (incl. its text) according to the charge level
 
 // Weather data (persisted):
 static char location_name[32];
@@ -149,8 +149,8 @@ static bool night_mode = false;
 static int moon_phase = 0;
 static bool warning_last_update = false;
 static bool weather_outdated = false; // see WEATHER_HIDE_AFTER_MINUTES
-static int battery_percent = 70;
-static GColor battery_color;
+static int battery_percent[2] = {70, -1}; // of the watch and the phone (see KEY_PHONE_BATTERY, not persisted), -1 = unknown
+static uint8_t battery_fill_colors[2][2];  // parameters of the fill layers: battery color, background
 static int condition_y = 0; // y and height of the condition text layer, depend on the font which is chosen to fit the text
 static int condition_h = 30;
 static int temp_dy = 0;     // vertical correction of the temperature layer for the smaller fallback font
@@ -246,13 +246,14 @@ static void move_layers(void) {
 	MOVE_TEXT_LAYER(s_temp_layer, WEATHER_ICON_SIZE + RAIN_WIDTH, temp_y - TEXT_36_TOP + temp_dy, 200 - WEATHER_ICON_SIZE - RAIN_WIDTH, 50);
 	MOVE_TEXT_LAYER(s_temp_min_max_layer, WEATHER_ICON_SIZE + RAIN_WIDTH, temp_y + TEXT_36_H + 2*PADDING - TEXT_22_TOP, 200 - WEATHER_ICON_SIZE - RAIN_WIDTH, 40);
 	for (int i = 0; i < 4; i++) MOVE_LAYER(s_digit_layers[i], TIME_X + i*(DIGIT_WIDTH + DIGIT_GAP) + ((i >= 2) ? COLON_SIZE + DIGIT_GAP : 0), DIGIT_Y, DIGIT_WIDTH, DIGIT_HEIGHT);
-	// the weekdays (except Mittwoch) have a descender, the letters are centered with only half of it:
-	MOVE_TEXT_LAYER(s_date_layer, 0, TEXT_Y(DATE_Y, DATE_H, TEXT_22_TOP, TEXT_22_H + TEXT_22_DESC/2), 200, 30);
+	MOVE_TEXT_LAYER(s_date_layer, 0, TEXT_Y(DATE_Y, DATE_H, TEXT_22_TOP, TEXT_22_H), BATTERY_X - 2, 30); // the short weekdays have no descender
 	MOVE_TEXT_LAYER(s_sleep_layer, 0, TEXT_Y(BOTTOM_Y, BOTTOM_H, TEXT_18_TOP, TEXT_18_PAREN_H), BATTERY_X - 2, 30);
 	MOVE_LAYER(s_notif_layer, 0, BOTTOM_Y + (BOTTOM_H - NOTIF_ICON_SIZE)/2, BATTERY_X - 2, NOTIF_ICON_SIZE);
 	MOVE_LAYER(s_trains_layer, 0, DATE_Y, 200, BOTTOM_Y + BOTTOM_H - DATE_Y);
-	MOVE_TEXT_LAYER(s_battery_text_layer, BATTERY_X, TEXT_Y(BATTERY_Y, BATTERY_HEIGHT, TEXT_16_TOP, TEXT_16_H), BATTERY_WIDTH, 24);
-	MOVE_LAYER(effect_layer_get_layer(s_battery_fill_layer), BATTERY_X + BATTERY_BORDER, BATTERY_Y + BATTERY_BORDER, (BATTERY_WIDTH - 2*BATTERY_BORDER)*battery_percent/100, BATTERY_HEIGHT - 2*BATTERY_BORDER);
+	for (int i = 0; i < 2; i++){
+		MOVE_TEXT_LAYER(s_battery_text_layers[i], BATTERY_X, TEXT_Y(BATTERY_Y(i), BATTERY_HEIGHT, TEXT_16_TOP, TEXT_16_H), BATTERY_WIDTH, 24);
+		MOVE_LAYER(effect_layer_get_layer(s_battery_fill_layers[i]), BATTERY_X + BATTERY_BORDER, BATTERY_Y(i) + BATTERY_BORDER, (BATTERY_WIDTH - 2*BATTERY_BORDER)*battery_percent[i]/100, BATTERY_HEIGHT - 2*BATTERY_BORDER);
+	}
 }
 
 static void background_update_proc(Layer *layer, GContext* ctx){
@@ -269,7 +270,7 @@ static void background_update_proc(Layer *layer, GContext* ctx){
 	graphics_fill_rect(ctx, GRect(0, WEATHER_Y, 200, WEATHER_ICON_SIZE), 0, GCornerNone);
 	graphics_context_set_fill_color(ctx, COLOR_DATE_BKGR);
 	graphics_fill_rect(ctx, GRect(0, DATE_Y, 200, DATE_H), 0, GCornerNone);
-	graphics_fill_rect(ctx, GRect(0, BOTTOM_Y, 200, BOTTOM_H), 0, GCornerNone); // sleep and battery, in the colors of the date
+	graphics_fill_rect(ctx, GRect(0, BOTTOM_Y, 200, BOTTOM_H), 0, GCornerNone); // sleep and phone battery, in the colors of the date
 
 	graphics_context_set_stroke_color(ctx, COLOR_LINES);
 	graphics_draw_line(ctx, GPoint(150, LOCATION_Y), GPoint(150, LOCATION_Y + LOCATION_H - 1));
@@ -283,12 +284,15 @@ static void background_update_proc(Layer *layer, GContext* ctx){
 	graphics_fill_rect(ctx, GRect(COLON_X, DIGIT_Y + 8*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H, COLON_SIZE, 7*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H), 0, GCornerNone);
 	graphics_fill_rect(ctx, GRect(COLON_X, DIGIT_Y + 30*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H, COLON_SIZE, 7*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H), 0, GCornerNone);
 
-	//battery (bottom right, gray body and nub, white inside), the charged part is inverted by s_battery_fill_layer:
-	graphics_context_set_fill_color(ctx, COLOR_BATTERY_BORDER);
-	graphics_fill_rect(ctx, GRect(BATTERY_X, BATTERY_Y, BATTERY_WIDTH, BATTERY_HEIGHT), 0, GCornerNone);
-	graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_WIDTH, BATTERY_Y + BATTERY_HEIGHT/2 - 3, 3, 7), 0, GCornerNone);
-	graphics_context_set_fill_color(ctx, COLOR_BATTERY_BKGR);
-	graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_BORDER, BATTERY_Y + BATTERY_BORDER, BATTERY_WIDTH - 2*BATTERY_BORDER, BATTERY_HEIGHT - 2*BATTERY_BORDER), 0, GCornerNone);
+	//batteries of the watch and the phone (right in the date row and the bottom row, gray body and nub, white inside), the charged part is inverted by s_battery_fill_layers:
+	for (int i = 0; i < 2; i++){
+		if (battery_percent[i] < 0) continue;
+		graphics_context_set_fill_color(ctx, COLOR_BATTERY_BORDER);
+		graphics_fill_rect(ctx, GRect(BATTERY_X, BATTERY_Y(i), BATTERY_WIDTH, BATTERY_HEIGHT), 0, GCornerNone);
+		graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_WIDTH, BATTERY_Y(i) + BATTERY_HEIGHT/2 - 3, 3, 7), 0, GCornerNone);
+		graphics_context_set_fill_color(ctx, COLOR_BATTERY_BKGR);
+		graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_BORDER, BATTERY_Y(i) + BATTERY_BORDER, BATTERY_WIDTH - 2*BATTERY_BORDER, BATTERY_HEIGHT - 2*BATTERY_BORDER), 0, GCornerNone);
+	}
 }
 
 static void digit_update_proc(Layer *layer, GContext* ctx) {
@@ -328,10 +332,9 @@ static void draw_drop(GContext *ctx, GPoint tip, int r, GColor color) {
 
 // next rain: a drop and "3h" (today), "1d" (tomorrow), the weekday ("Mo") if later, only the drop if it rains now, a striked through drop if no rain is in sight
 static void rain_update_proc(Layer *layer, GContext* ctx) {
-	static const char *weekdays[7] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 	static char text[16];
 	time_t now = time(NULL);
-	if (rain_in >= 102) snprintf(text, sizeof(text), "%s", weekdays[(localtime(&now)->tm_wday + rain_in - 100) % 7]);
+	if (rain_in >= 102) snprintf(text, sizeof(text), "%s", s_weekdays[(localtime(&now)->tm_wday + rain_in - 100) % 7]);
 	else snprintf(text, sizeof(text), (rain_in >= 100) ? "%dd" : "%dh", (rain_in >= 100) ? rain_in - 100 : rain_in);
 	bool with_text = (rain_in > 0);
 	const int r = 9, cx = RAIN_WIDTH/2;
@@ -369,9 +372,9 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 	struct tm *now_tm = localtime(&now);
 	int t = now_tm->tm_hour*60 + now_tm->tm_min;
 	const int row_top[2] = {0, BOTTOM_Y - DATE_Y}, row_h[2] = {DATE_H, BOTTOM_H};
-	// the battery is covered, the layer is above it:
+	// the battery and the phone battery are covered, the layer is above them:
 	graphics_context_set_fill_color(ctx, COLOR_DATE_BKGR);
-	graphics_fill_rect(ctx, GRect(0, BOTTOM_Y - DATE_Y, 200, BOTTOM_H), 0, GCornerNone);
+	for (int row = 0; row < 2; row++) graphics_fill_rect(ctx, GRect(0, row_top[row], 200, row_h[row]), 0, GCornerNone);
 	int count = strlen(departures)/6, d = 0;
 	for (int row = 0; row < 2; row++){
 		char texts[4][12], status[4];
@@ -529,7 +532,7 @@ static bool send_request(uint32_t key, uint8_t value) {
 	return app_message_outbox_send() == APP_MSG_OK;
 }
 
-// the notification icons replace the sleep if there are any; the departures cover both
+// the notification icons replace the sleep if there are any; the departures cover the bottom row
 static void update_bottom_row(void) {
 	layer_set_hidden(text_layer_get_layer(s_sleep_layer), trains_shown || (notif_icons[0] > 0));
 	layer_set_hidden(s_notif_layer, notif_icons[0] == 0);
@@ -600,24 +603,30 @@ static void handle_tick(struct tm* tick_time, TimeUnits units_changed) {
 	if (init_done && train_mode && (time(NULL) - train_last_request >= TRAIN_UPDATE_INTERVAL_MINUTES*60) && send_request(KEY_TRAIN_REQUEST, train_mode)) train_last_request = time(NULL);
 }
 
+// the battery of the watch (0, "*" while charging) or the phone (1, hidden if unknown): green, orange at <= 20 %, red at <= 10 %;
+// the text is drawn in that color, the fill layer swaps it with the white background
+static void display_battery(int i) {
+	static char texts[2][8];
+	snprintf(texts[i], sizeof(texts[i]), ((i == 0) && (last_charge_state == 1)) ? "*%d%%" : "%d%%", battery_percent[i]);
+	text_layer_set_text(s_battery_text_layers[i], texts[i]);
+	GColor color = (battery_percent[i] > 20) ? GColorIslamicGreen : (battery_percent[i] > 10) ? GColorOrange : GColorRed;
+	text_layer_set_text_color(s_battery_text_layers[i], color);
+	battery_fill_colors[i][0] = color.argb & 0b00111111;
+	battery_fill_colors[i][1] = COLOR_BATTERY_BKGR.argb & 0b00111111;
+	layer_set_hidden(text_layer_get_layer(s_battery_text_layers[i]), battery_percent[i] < 0);
+	layer_set_hidden(effect_layer_get_layer(s_battery_fill_layers[i]), battery_percent[i] < 0);
+	move_layers();
+	layer_mark_dirty(s_background_layer);
+}
+
 static void handle_battery(BatteryChargeState charge_state) {
 	int old_charge_state = last_charge_state;
 	last_charge_state = charge_state.is_plugged ? (charge_state.is_charging ? 1 : 2) : 0;
 	// backlight on while plugged in and full
 	if (LIGHT_WHEN_PLUGGED && (old_charge_state != last_charge_state)) light_enable(last_charge_state == 2);
 
-	battery_percent = charge_state.charge_percent;
-	static char battery_buffer[8];
-	snprintf(battery_buffer, sizeof(battery_buffer), (last_charge_state == 1) ? "*%d%%" : "%d%%", battery_percent);
-	text_layer_set_text(s_battery_text_layer, battery_buffer);
-
-	// green, orange at <= 20 %, red at <= 10 %; the text is drawn in that color, the fill layer swaps it with the white background
-	battery_color = (battery_percent > 20) ? GColorIslamicGreen : (battery_percent > 10) ? GColorOrange : GColorRed;
-	text_layer_set_text_color(s_battery_text_layer, battery_color);
-	GlobalInverterColor = battery_color.argb & 0b00111111;
-	GlobalBkgColor      = COLOR_BATTERY_BKGR.argb & 0b00111111;
-	move_layers();
-	layer_mark_dirty(s_background_layer);
+	battery_percent[0] = charge_state.charge_percent;
+	display_battery(0);
 }
 
 static void handle_bluetooth(bool connected) {
@@ -629,8 +638,10 @@ static void handle_bluetooth(bool connected) {
 	}
 	if (connected && !bt_connected && init_done) do_update_weather = true;
 	bt_connected = connected;
-	if (!connected){ // the icons would be outdated
+	if (!connected){ // the icons and the phone battery would be outdated
 		notif_icons[0] = 0;
+		battery_percent[1] = -1;
+		display_battery(1);
 		update_bottom_row();
 	}
 	layer_mark_dirty(s_icon_layer);
@@ -684,6 +695,10 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 				update_bottom_row();
 				break;
 			}
+			case KEY_PHONE_BATTERY:
+				battery_percent[1] = (int)t->value->int32;
+				display_battery(1);
+				break;
 			case KEY_TRAIN_DONE: {
 				time_t now = time(NULL);
 				train_done = localtime(&now)->tm_yday*10 + (int)t->value->int32;
@@ -763,13 +778,15 @@ static void main_window_load(Window *window) {
 	s_temp_min_max_layer = create_text_layer(s_font_22, COLOR_WEATHER_TEXT);
 	s_date_layer         = create_text_layer(s_font_22sb, COLOR_DATE_TEXT);
 	s_sleep_layer        = create_text_layer(s_font_18sb, COLOR_DATE_TEXT);
-	s_battery_text_layer = create_text_layer(s_font_16, GColorIslamicGreen);
+	for (int i = 0; i < 2; i++) s_battery_text_layers[i] = create_text_layer(s_font_16, GColorIslamicGreen);
 	text_layer_set_overflow_mode(s_condition_layer, GTextOverflowModeTrailingEllipsis);
 
 	// after the battery text, so that the effect inverts it too:
-	s_battery_fill_layer = effect_layer_create(GRectZero);
-	effect_layer_add_effect(s_battery_fill_layer, effect_invert_color, (void *)0b00000000); //use global inverter color
-	layer_add_child(s_window_layer, effect_layer_get_layer(s_battery_fill_layer));
+	for (int i = 0; i < 2; i++){
+		s_battery_fill_layers[i] = effect_layer_create(GRectZero);
+		effect_layer_add_effect(s_battery_fill_layers[i], effect_invert_color, battery_fill_colors[i]);
+		layer_add_child(s_window_layer, effect_layer_get_layer(s_battery_fill_layers[i]));
+	}
 
 	s_notif_layer = layer_create(GRectZero);
 	layer_set_update_proc(s_notif_layer, notif_update_proc);
@@ -787,6 +804,7 @@ static void main_window_load(Window *window) {
 	time_t now = time(NULL);
 	handle_tick(localtime(&now), MINUTE_UNIT | HOUR_UNIT | DAY_UNIT);
 	handle_battery(battery_state_service_peek());
+	display_battery(1);
 	handle_bluetooth(connection_service_peek_pebble_app_connection());
 
 	tick_timer_service_subscribe(MINUTE_UNIT, handle_tick);
@@ -816,7 +834,7 @@ static void main_window_unload(Window *window) {
 	layer_destroy(s_rain_layer);
 	layer_destroy(s_trains_layer);
 	layer_destroy(s_notif_layer);
-	effect_layer_destroy(s_battery_fill_layer);
+	for (int i = 0; i < 2; i++) effect_layer_destroy(s_battery_fill_layers[i]);
 	text_layer_destroy(s_temp_layer);
 	text_layer_destroy(s_location_layer);
 	text_layer_destroy(s_last_update_layer);
@@ -824,7 +842,7 @@ static void main_window_unload(Window *window) {
 	text_layer_destroy(s_temp_min_max_layer);
 	text_layer_destroy(s_date_layer);
 	text_layer_destroy(s_sleep_layer);
-	text_layer_destroy(s_battery_text_layer);
+	for (int i = 0; i < 2; i++) text_layer_destroy(s_battery_text_layers[i]);
 	GFont fonts[10] = {s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36};
 	for (int i = 0; i < 10; i++) fonts_unload_custom_font(fonts[i]);
 }

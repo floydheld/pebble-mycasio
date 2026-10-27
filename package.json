@@ -33,10 +33,10 @@
             "KEY_WEATHER_WIND": 110,
             "KEY_WEATHER_RAIN": 111,
             "KEY_TRAIN_DEPARTURES": 120,
-            "KEY_TRAIN_DONE": 121,
-            "KEY_TRAIN_REQUEST": 122,
+            "KEY_TRAIN_NOTE": 124,
             "KEY_NOTIF_ICONS": 130,
-            "KEY_PHONE_BATTERY": 131
+            "KEY_PHONE_BATTERY": 131,
+            "KEY_PHONE_DND": 132
         },
         "projectType": "native",
         "resources": {

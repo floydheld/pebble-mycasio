@@ -4,8 +4,23 @@
 
     <!-- to load the notification icons from the resources of the other apps -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission"/>
+    <!-- to send the delayed notifications and the departures on time, also when the phone sleeps (DueReceiver, TrainReceiver) -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- the trains (TrainService): the departures, and the location also in the background ("Allow all the time") to know the station and where the bike is -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
+    <!-- Google's activity recognition: where the bike ride ended, when on the train -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
+    <uses-permission android:name="com.google.android.gms.permission.ACTIVITY_RECOGNITION" android:maxSdkVersion="28"/>
 
     <application
+            android:name=".App"
             android:label="MyCasio Notifications"
             android:icon="@android:drawable/sym_def_app_icon"
             android:theme="@android:style/Theme.Material.Light">
@@ -24,6 +39,11 @@
                 <action android:name="android.service.notification.NotificationListenerService"/>
             </intent-filter>
         </service>
+
+        <receiver android:name=".DueReceiver" android:exported="false"/>
+        <receiver android:name=".TrainReceiver" android:exported="false"/>
+        <receiver android:name=".TransitionReceiver" android:exported="false"/>
+        <service android:name=".TrainService" android:exported="false" android:foregroundServiceType="location"/>
 
         <service android:name=".PebbleListenerService"
                  android:exported="true"

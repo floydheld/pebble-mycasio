@@ -12,9 +12,9 @@
 #define KEY_WARN_LOCATION      50
 #define KEY_WEATHER_WIND      110 // wind speed in km/h
 #define KEY_WEATHER_RAIN      111 // next rain: -1 = none in sight, 0 = now, 1..23 = in hours (today), 100+d = in d days
-#define KEY_TRAIN_DEPARTURES  120 // per departure 6 characters: time HHMM (incl. delay), S = S-Bahn / X = REX / ..., 0 = on time / D = delayed / C = cancelled
-#define KEY_TRAIN_DONE        121 // the JS: the morning (1) / evening (2) is over (left / arrived in the area of Pressbaum); persistent: tm_yday*10 + 1 / 2
-#define KEY_TRAIN_REQUEST     122 // to the JS: departures of the morning (1) / evening (2)
+#define KEY_TRAIN_DEPARTURES  120 // from the Android app: per departure 6 characters: time HHMM (incl. delay), S = S-Bahn / X = REX / ..., 0 = on time / D = delayed / C = cancelled; "" = none
 #define KEY_TRAIN_LAST_UPDATE 123 // persistent only
+#define KEY_TRAIN_NOTE        124 // from the Android app, always with KEY_TRAIN_DEPARTURES: e.g. "Rad: Tullnerbach" (evening: where the bike is) instead of the weather condition; "" = none
 #define KEY_NOTIF_ICONS       130 // from the Android companion app (android/): count, then per icon NOTIF_ICON_SIZE x NOTIF_ICON_SIZE bits row by row (most significant bit first), 1 = opaque
 #define KEY_PHONE_BATTERY     131 // from the Android companion app: battery level of the phone in percent
+#define KEY_PHONE_DND         132 // from the Android companion app: 1 = Do Not Disturb is on on the phone

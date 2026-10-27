@@ -13,7 +13,8 @@ pebble install --phone <ip address>
 */
 // Pebble Time 2 (emery, 200x228)
 // Rows from top to bottom: location | last update, weather condition, weather icon | next rain | temperature + min/max temperature, time, date | battery, sleep (deep sleep) | phone battery
-// At the times of the trains (config.h) the date and the sleep are replaced by the ÖBB departures.
+// At the times of the trains (from the Android app, see config.h) the date and the sleep are replaced by the ÖBB departures and the weather condition by a note (station / where the bike is).
+// The time is red while Quiet Time is on on the watch or Do Not Disturb on the phone.
 // Each row is as high as its content plus PADDING above and below (the clock and the date 2px more; the bottom row is as high as the notification icons). The weather condition takes the remaining space, which is the height of the date row.
 // Rows with the same background are separated by a 1px line.
 #define PADDING 2
@@ -93,7 +94,9 @@ static const char *s_weekdays[7] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 #define COLOR_DATE_TEXT       GColorOxfordBlue
 #define COLOR_DATE_BKGR       GColorPastelYellow
 #define COLOR_CLOCK           GColorWhite      // time
+#define COLOR_CLOCK_QUIET     GColorRed        // time during Quiet Time / Do Not Disturb
 #define COLOR_CLOCK_BKGR      GColorBlack
+#define COLOR_TRAIN_NOTE      GColorChromeYellow // the note of the trains instead of the weather condition
 #define COLOR_LINES           GColorDarkGray
 #define COLOR_BATTERY_BKGR    GColorWhite      // the charged part is green, orange or red
 #define COLOR_BATTERY_BORDER  GColorLightGray
@@ -138,8 +141,8 @@ static int warning_location = 0; //0: no warning, 1: red warning (GPS differed f
 static int last_charge_state = 0; //0: discharging; 1: plugged & charging; 2: plugged & full
 static char departures[6*MAX_DEPARTURES + 1]; // see KEY_TRAIN_DEPARTURES
 static uint8_t notif_icons[1 + MAX_NOTIF_ICONS*NOTIF_ICON_BYTES]; // see KEY_NOTIF_ICONS, not persisted (sent again when the watchface is opened)
+static char train_note[32];   // see KEY_TRAIN_NOTE
 static time_t train_last_updated = 0;
-static int train_done = -1; // tm_yday*10 + 1 / 2: the morning / evening of that day is over
 
 // Runtime variables:
 static bool init_done = false;
@@ -157,9 +160,10 @@ static int temp_dy = 0;     // vertical correction of the temperature layer for 
 static char temp_text[12];
 static GColor icon_color;
 static GColor icon_bkgr_color;
-static int train_mode = 0; // 0: off, 1: morning (Pressbaum -> Westbahnhof), 2: evening (Westbahnhof -> Pressbaum)
 static bool trains_shown = false; // the departures cover the date and the bottom row
-static time_t train_last_request = 0;
+static bool note_shown = false;   // the note of the trains replaces the weather condition
+static bool phone_dnd = false;    // see KEY_PHONE_DND, not persisted
+static GColor clock_color;        // COLOR_CLOCK or COLOR_CLOCK_QUIET
 
 // Screen obstruction (timeline peek): shift of all layers to the top in pixels
 static bool will_be_obstructed = false;
@@ -280,7 +284,7 @@ static void background_update_proc(Layer *layer, GContext* ctx){
 	graphics_draw_line(ctx, GPoint(0, BOTTOM_Y - 1), GPoint(199, BOTTOM_Y - 1));
 
 	//colon of the time, at y 8 and 30 in the original 26x41 design:
-	graphics_context_set_fill_color(ctx, COLOR_CLOCK);
+	graphics_context_set_fill_color(ctx, clock_color);
 	graphics_fill_rect(ctx, GRect(COLON_X, DIGIT_Y + 8*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H, COLON_SIZE, 7*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H), 0, GCornerNone);
 	graphics_fill_rect(ctx, GRect(COLON_X, DIGIT_Y + 30*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H, COLON_SIZE, 7*DIGIT_HEIGHT/SEVEN_SEGMENT_DESIGN_H), 0, GCornerNone);
 
@@ -296,7 +300,7 @@ static void background_update_proc(Layer *layer, GContext* ctx){
 }
 
 static void digit_update_proc(Layer *layer, GContext* ctx) {
-	graphics_context_set_fill_color(ctx, COLOR_CLOCK);
+	graphics_context_set_fill_color(ctx, clock_color);
 	seven_segment_paint(ctx, *(int *)layer_get_data(layer), layer_get_bounds(layer));
 }
 
@@ -426,7 +430,7 @@ static void load_data(void) {
 	if (persist_exists(KEY_BTY_LAST_STATE)) last_charge_state = persist_read_int(KEY_BTY_LAST_STATE);
 	if (persist_exists(KEY_TRAIN_DEPARTURES)) persist_read_string(KEY_TRAIN_DEPARTURES, departures, sizeof(departures));
 	if (persist_exists(KEY_TRAIN_LAST_UPDATE)) train_last_updated = (time_t)persist_read_int(KEY_TRAIN_LAST_UPDATE);
-	if (persist_exists(KEY_TRAIN_DONE)) train_done = persist_read_int(KEY_TRAIN_DONE);
+	if (persist_exists(KEY_TRAIN_NOTE)) persist_read_string(KEY_TRAIN_NOTE, train_note, sizeof(train_note));
 }
 
 static void save_data(void) {
@@ -445,7 +449,7 @@ static void save_data(void) {
 	persist_write_int(KEY_BTY_LAST_STATE, last_charge_state);
 	persist_write_string(KEY_TRAIN_DEPARTURES, departures);
 	persist_write_int(KEY_TRAIN_LAST_UPDATE, (int)train_last_updated);
-	persist_write_int(KEY_TRAIN_DONE, train_done);
+	persist_write_string(KEY_TRAIN_NOTE, train_note);
 }
 
 // time since the last weather update, red if older than the update interval; the weather is hidden if it is older than WEATHER_HIDE_AFTER_MINUTES
@@ -470,7 +474,7 @@ static void display_last_updated(void) {
 	bool outdated = (phone_last_updated == 0) || (age > WEATHER_HIDE_AFTER_MINUTES*60);
 	if (outdated != weather_outdated){
 		weather_outdated = outdated;
-		layer_set_hidden(text_layer_get_layer(s_condition_layer), outdated);
+		layer_set_hidden(text_layer_get_layer(s_condition_layer), outdated && !note_shown);
 		layer_set_hidden(text_layer_get_layer(s_temp_layer), outdated);
 		layer_set_hidden(text_layer_get_layer(s_temp_min_max_layer), outdated);
 		layer_set_hidden(s_rain_layer, outdated);
@@ -489,18 +493,21 @@ static void display_weather(void) {
 	temp_dy = fits ? 0 : TEXT_36_TOP - TEXT_32_TOP + (TEXT_36_H - TEXT_32_H)/2;
 	text_layer_set_text(s_temp_min_max_layer, temp_min_max);
 
-	// weather condition: in the font of the date, or smaller if it does not fit on one line (in the smallest one cut with "..."); the letters are centered without the descenders
+	// weather condition (or the note of the trains): in the font of the date, or smaller if it does not fit on one line (in the smallest one cut with "..."); the letters are centered without the descenders
+	const char *condition = note_shown ? train_note : weather_condition;
 	GFont fonts[3] = {s_font_22, s_font_18, s_font_14};
 	static const int tops[3] = {TEXT_22_TOP, TEXT_18_TOP, TEXT_14_TOP};
 	static const int heights[3] = {TEXT_22_H, TEXT_18_H, TEXT_14_H};
 	int f = 0;
 	GSize size;
 	for (f = 0; f < 3; f++){
-		size = graphics_text_layout_get_content_size(weather_condition, fonts[f], GRect(0, 0, 1000, 100), GTextOverflowModeFill, GTextAlignmentCenter);
+		size = graphics_text_layout_get_content_size(condition, fonts[f], GRect(0, 0, 1000, 100), GTextOverflowModeFill, GTextAlignmentCenter);
 		if ((size.w <= 200 - 2*PADDING) || (f == 2)) break;
 	}
 	text_layer_set_font(s_condition_layer, fonts[f]);
-	text_layer_set_text(s_condition_layer, weather_condition);
+	text_layer_set_text(s_condition_layer, condition);
+	text_layer_set_text_color(s_condition_layer, note_shown ? COLOR_TRAIN_NOTE : COLOR_CONDITION_TEXT);
+	layer_set_hidden(text_layer_get_layer(s_condition_layer), weather_outdated && !note_shown);
 	condition_y = TEXT_Y(CONDITION_Y, CONDITION_H, tops[f], heights[f]);
 	condition_h = size.h + 4; // a single line
 	move_layers();
@@ -524,12 +531,21 @@ static void update_icon(void) {
 	layer_mark_dirty(s_background_layer);
 }
 
-// to the JS: the weather (key 0) or the departures (KEY_TRAIN_REQUEST); false if the outbox is busy, then it is tried again in the next minute
-static bool send_request(uint32_t key, uint8_t value) {
+// to the JS: the weather; false if the outbox is busy, then it is tried again in the next minute
+static bool request_weather(void) {
 	DictionaryIterator *iter;
 	if (app_message_outbox_begin(&iter) != APP_MSG_OK) return false;
-	dict_write_uint8(iter, key, value);
+	dict_write_uint8(iter, 0, 0);
 	return app_message_outbox_send() == APP_MSG_OK;
+}
+
+// red during Quiet Time (checked every minute) or Do Not Disturb on the phone
+static void update_clock_color(void) {
+	GColor color = (quiet_time_is_active() || phone_dnd) ? COLOR_CLOCK_QUIET : COLOR_CLOCK;
+	if (gcolor_equal(color, clock_color)) return;
+	clock_color = color;
+	for (int i = 0; i < 4; i++) layer_mark_dirty(s_digit_layers[i]);
+	layer_mark_dirty(s_background_layer);
 }
 
 // the notification icons replace the sleep if there are any; the departures cover the bottom row
@@ -539,27 +555,16 @@ static void update_bottom_row(void) {
 	layer_mark_dirty(s_notif_layer);
 }
 
-// the departures replace the date and the sleep on the train days, from the start time until the JS reports the morning / evening as over, or the end time
-static void update_train_mode(void) {
+// the departures replace the date and the sleep, the note the weather condition, until the Android app clears them; only those of today
+static void update_trains(void) {
+	int updated_yday = localtime(&train_last_updated)->tm_yday;
 	time_t now = time(NULL);
-	struct tm now_tm = *localtime(&now);
-	int t = now_tm.tm_hour*60 + now_tm.tm_min;
-	int mode = 0;
-	if (TRAIN_WEEKDAYS & (1 << now_tm.tm_wday)){
-		if ((t >= TRAIN_MORNING_START) && (t < TRAIN_MORNING_END)) mode = 1;
-		if ((t >= TRAIN_EVENING_START) && (t < TRAIN_EVENING_END)) mode = 2;
-	}
-	if (train_done == now_tm.tm_yday*10 + mode) mode = 0;
-	// departures from before the start of this morning / evening (e.g. of yesterday) are dropped:
-	int start = (mode == 1) ? TRAIN_MORNING_START : TRAIN_EVENING_START;
-	if (mode && (train_last_updated < now - (t - start)*60 - now_tm.tm_sec)) departures[0] = 0;
-	if (mode != train_mode){
-		train_mode = mode;
-		train_last_request = 0; // request the departures right away
-	}
-	// only when there are departures still to come, else (e.g. before the first ones are received) the date and the sleep stay
+	struct tm *now_tm = localtime(&now);
+	int t = now_tm->tm_hour*60 + now_tm->tm_min;
+	bool fresh = (now_tm->tm_yday == updated_yday) && (now - train_last_updated < 24*3600);
+	// only when there are departures still to come
 	bool shown = false;
-	for (int d = 0; mode && !shown && (d < (int)strlen(departures)/6); d++){
+	for (int d = 0; fresh && !shown && (d < (int)strlen(departures)/6); d++){
 		const char *p = departures + 6*d;
 		shown = ((p[0] - '0')*600 + (p[1] - '0')*60 + (p[2] - '0')*10 + p[3] - '0' >= t);
 	}
@@ -570,6 +575,11 @@ static void update_train_mode(void) {
 		layer_set_hidden(s_trains_layer, !shown);
 	}
 	layer_mark_dirty(s_trains_layer);
+	bool note = fresh && train_note[0];
+	if (note != note_shown){
+		note_shown = note;
+		display_weather();
+	}
 }
 
 static void handle_tick(struct tm* tick_time, TimeUnits units_changed) {
@@ -597,10 +607,10 @@ static void handle_tick(struct tm* tick_time, TimeUnits units_changed) {
 
 	update_icon();
 	display_last_updated();
-	update_train_mode();
+	update_trains();
+	update_clock_color();
 
-	if (init_done && (do_update_weather || (time(NULL) - phone_last_updated >= WEATHER_UPDATE_INTERVAL_MINUTES*60-60)) && send_request(0, 0)) do_update_weather = false;
-	if (init_done && train_mode && (time(NULL) - train_last_request >= TRAIN_UPDATE_INTERVAL_MINUTES*60) && send_request(KEY_TRAIN_REQUEST, train_mode)) train_last_request = time(NULL);
+	if (init_done && (do_update_weather || (time(NULL) - phone_last_updated >= WEATHER_UPDATE_INTERVAL_MINUTES*60-60)) && request_weather()) do_update_weather = false;
 }
 
 // the battery of the watch (0, "*" while charging) or the phone (1, hidden if unknown): green, orange at <= 20 %, red at <= 10 %;
@@ -638,11 +648,13 @@ static void handle_bluetooth(bool connected) {
 	}
 	if (connected && !bt_connected && init_done) do_update_weather = true;
 	bt_connected = connected;
-	if (!connected){ // the icons and the phone battery would be outdated
+	if (!connected){ // the icons, the phone battery and Do Not Disturb would be outdated
 		notif_icons[0] = 0;
 		battery_percent[1] = -1;
+		phone_dnd = false;
 		display_battery(1);
 		update_bottom_row();
+		update_clock_color();
 	}
 	layer_mark_dirty(s_icon_layer);
 	layer_mark_dirty(s_background_layer);
@@ -687,6 +699,13 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 				snprintf(departures, sizeof(departures), "%s", t->value->cstring);
 				train_last_updated = time(NULL);
 				break;
+			case KEY_TRAIN_NOTE:
+				snprintf(train_note, sizeof(train_note), "%s", t->value->cstring);
+				break;
+			case KEY_PHONE_DND:
+				phone_dnd = (t->value->int32 != 0);
+				update_clock_color();
+				break;
 			case KEY_NOTIF_ICONS: {
 				memset(notif_icons, 0, sizeof(notif_icons));
 				memcpy(notif_icons, t->value->data, (t->length < sizeof(notif_icons)) ? t->length : sizeof(notif_icons));
@@ -699,17 +718,12 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 				battery_percent[1] = (int)t->value->int32;
 				display_battery(1);
 				break;
-			case KEY_TRAIN_DONE: {
-				time_t now = time(NULL);
-				train_done = localtime(&now)->tm_yday*10 + (int)t->value->int32;
-				break;
-			}
 		}
 	}
 	save_data();
 	display_weather();
 	update_icon();
-	update_train_mode();
+	update_trains();
 }
 
 static void unobstructed_area_will_change(GRect final_unobstructed_area, void *context) {

@@ -186,66 +186,11 @@ function sendWeather(lat, lon, warn_location) {
   });
 }
 
-// ÖBB departures (Scotty live stationboard): mornings Pressbaum -> Wien Westbahnhof, evenings back
-var PRESSBAUM = {id: "1132415", lat: 48.181354, lon: 16.077837};
-var WESTBAHNHOF = {id: "1291501"};
-var PRESSBAUM_RADIUS_KM = 5;     // the area of Pressbaum around the station
-var MAX_POSITION_ERROR_KM = 1;   // less accurate positions are ignored
-
-// direction 1 = morning: until leaving the area of Pressbaum, 2 = evening: until arriving there; then the watch is told that the morning / evening is over
-function getDepartures(direction) {
-  navigator.geolocation.getCurrentPosition(
-    function(pos) {
-      var dx = (pos.coords.longitude - PRESSBAUM.lon) * 111.32 * Math.cos(PRESSBAUM.lat * Math.PI / 180);
-      var dy = (pos.coords.latitude - PRESSBAUM.lat) * 110.57;
-      var in_pressbaum = Math.sqrt(dx*dx + dy*dy) < PRESSBAUM_RADIUS_KM;
-      if ((pos.coords.accuracy <= MAX_POSITION_ERROR_KM*1000) && (in_pressbaum !== (direction == 1))) {
-        console.log("trains of direction " + direction + " are over, in Pressbaum: " + in_pressbaum);
-        Pebble.sendAppMessage({"KEY_TRAIN_DONE": direction});
-      } else {
-        sendDepartures(direction);
-      }
-    },
-    function(err) {
-      console.log("location error (" + err.code + "): " + err.message);
-      sendDepartures(direction); // the watch shows them until the end time
-    },
-    {enableHighAccuracy: false, timeout: 10000, maximumAge: 60000}
-  );
-}
-
-function sendDepartures(direction) {
-  var from = (direction == 1) ? PRESSBAUM : WESTBAHNHOF, to = (direction == 1) ? WESTBAHNHOF : PRESSBAUM;
-  var url = "https://fahrplan.oebb.at/bin/stboard.exe/dn?L=vs_scotty.vs_liveticker&evaId=" + from.id + "&dirInput=" + to.id + "&boardType=dep&productsFilter=1111111111111&tickerID=dep&start=yes&eqstops=false&maxJourneys=10&additionalTime=0&outputMode=tickerDataOnly";
-  xhrRequest(url, 'GET', function(text) {
-    var journeys;
-    try {
-      // the answer is "journeysObj = {...}"
-      journeys = JSON.parse(text.substring(text.indexOf("{"))).journey;
-    } catch (e) {
-      console.log("could not parse departures: " + text);
-      return;
-    }
-    // per departure 6 characters: time HHMM (incl. delay), S = S-Bahn / X = REX / else the first letter, 0 = on time / D = delayed / C = cancelled
-    var departures = "";
-    for (var i = 0; i < Math.min(journeys.length, 10); i++) {
-      var j = journeys[i], rt = j.rt || {};
-      var cancelled = (rt.status === "Ausfall");
-      var delayed = !cancelled && rt.dlt && (rt.dlt !== j.ti);
-      var type = /^S/.test(j.pr) ? "S" : /^REX/.test(j.pr) ? "X" : j.pr.charAt(0);
-      departures += (delayed ? rt.dlt : j.ti).replace(":", "") + type + (cancelled ? "C" : delayed ? "D" : "0");
-    }
-    console.log("Sending departures: " + departures);
-    Pebble.sendAppMessage({"KEY_TRAIN_DEPARTURES": departures});
-  });
-}
-
 Pebble.addEventListener('ready', function(e) {
   console.log("PebbleKit JS ready!");
 });
 
-// the watch requests the departures with KEY_TRAIN_REQUEST (direction), else the weather
+// the watch requests the weather (the departures come from the Android app)
 Pebble.addEventListener('appmessage', function(e) {
-  if (e.payload["KEY_TRAIN_REQUEST"]) getDepartures(e.payload["KEY_TRAIN_REQUEST"]);
-  else getWeather();
+  getWeather();
 });

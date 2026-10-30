@@ -82,6 +82,7 @@ const val PREF_TRAIN_DONE = "train_done" // "2026-10-15/1": the morning (1) / ev
 const val PREF_BIKE = "bike_station"     // name of the station of the bike, or BIKE_HOME
 const val BIKE_HOME = "daheim"           // walked to the train: no bike ride this morning
 const val PREF_BIKE_DATE = "bike_date"   // the day when it was left there
+val TIME = Regex("\\d\\d:\\d\\d")         // a time of the departures ("ti", "dlt")
 
 // 1 = morning, 2 = evening, 0 = no trains now (also when that morning / evening is over)
 fun trainMode(context: Context, now: LocalDateTime = LocalDateTime.now()): Int {
@@ -237,17 +238,18 @@ class TrainService : Service() {
         val connection = (url.openConnection() as HttpURLConnection).apply { connectTimeout = 15_000; readTimeout = 15_000 }
         val text = try { connection.inputStream.bufferedReader(Charsets.ISO_8859_1).readText() } finally { connection.disconnect() }
         val journeys = JSONObject(text.substring(text.indexOf('{'))).getJSONArray("journey") // the answer is "journeysObj = {...}"
-        (0 until minOf(journeys.length(), 10)).joinToString("") { i ->
+        (0 until journeys.length()).mapNotNull { i ->
             val journey = journeys.getJSONObject(i)
             val rt = journey.optJSONObject("rt") // false without real time data
-            val time = journey.getString("ti")
+            val time = journey.getString("ti").takeIf { TIME.matches(it) } ?: return@mapNotNull null // each departure must be 6 characters
             val cancelled = rt?.optString("status") == "Ausfall"
-            val expected = if (rt == null || rt.isNull("dlt")) time else rt.getString("dlt")
+            // cancelled trains have "dlt": "": the planned time (an empty one shifted all the following departures on the watch)
+            val expected = rt?.optString("dlt")?.takeIf { TIME.matches(it) } ?: time
             val delayed = !cancelled && expected != time
             val product = journey.getString("pr")
             val type = if (product.startsWith("S")) "S" else if (product.startsWith("REX")) "X" else product.take(1)
             expected.replace(":", "") + type + (if (cancelled) "C" else if (delayed) "D" else "0")
-        }
+        }.take(10).joinToString("")
     } catch (e: Exception) {
         status = "departures: $e"
         null

@@ -35,7 +35,7 @@ pebble install --phone <ip address>
 #define NOTIF_ICON_GAP  4
 #define MAX_NOTIF_ICONS 6
 
-// All texts except the time and the departures are in Montserrat Medium (the last update in Montserrat Regular, the date and the sleep in Montserrat SemiBold), in the sizes of the names. Measured glyph extents (like the
+// All texts except the time and the departures are in Montserrat Medium (the last update in Montserrat Regular, the date, the sleep and the batteries in Montserrat SemiBold), in the sizes of the names. Measured glyph extents (like the
 // Pebble font generator renders them): top offset of the capitals and digits within the text layer, their height down to the baseline, and the descenders.
 // The departures are in the system font Gothic Bold, GOTHIC_* measured in the emulator.
 #define TEXT_14_TOP          3
@@ -74,7 +74,7 @@ pebble install --phone <ip address>
 #define BOTTOM_H     NOTIF_ICON_SIZE
 #define DIGIT_Y      (CLOCK_Y + TIME_PADDING)
 #define BATTERY_Y(i) ((i) ? BOTTOM_Y + (BOTTOM_H - BATTERY_HEIGHT)/2 : DATE_Y + (DATE_H - BATTERY_HEIGHT)/2) // of the watch (0) in the date row, of the phone (1) in the bottom row
-#define BATTERY_HEIGHT 19
+#define BATTERY_HEIGHT 23 // nearly as high as the rows (DATE_H 26, BOTTOM_H 27)
 #define BATTERY_WIDTH  65 // body without the nub
 #define BATTERY_BORDER 3  // gray border around the charged part
 #define BATTERY_X      (195 - BATTERY_WIDTH) // the nub is right of the body up to 197
@@ -98,7 +98,7 @@ static const char *s_weekdays[7] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 #define COLOR_CLOCK_BKGR      GColorBlack
 #define COLOR_TRAIN_NOTE      GColorChromeYellow // the note of the trains instead of the weather condition
 #define COLOR_LINES           GColorDarkGray
-#define COLOR_BATTERY_BKGR    GColorWhite      // the charged part is green, orange or red
+#define COLOR_BATTERY_BKGR    GColorWhite      // the charged part is dark green, brown or dark red
 #define COLOR_BATTERY_BORDER  GColorLightGray
 #define COLOR_BT              GColorVividCerulean
 #define COLOR_BT_BKGR         GColorBlack
@@ -255,7 +255,7 @@ static void move_layers(void) {
 	MOVE_LAYER(s_notif_layer, 0, BOTTOM_Y + (BOTTOM_H - NOTIF_ICON_SIZE)/2, BATTERY_X - 2, NOTIF_ICON_SIZE);
 	MOVE_LAYER(s_trains_layer, 0, DATE_Y, 200, BOTTOM_Y + BOTTOM_H - DATE_Y);
 	for (int i = 0; i < 2; i++){
-		MOVE_TEXT_LAYER(s_battery_text_layers[i], BATTERY_X, TEXT_Y(BATTERY_Y(i), BATTERY_HEIGHT, TEXT_16_TOP, TEXT_16_H), BATTERY_WIDTH, 24);
+		MOVE_TEXT_LAYER(s_battery_text_layers[i], BATTERY_X, TEXT_Y(BATTERY_Y(i), BATTERY_HEIGHT, TEXT_18_TOP, TEXT_18_H), BATTERY_WIDTH, 26);
 		MOVE_LAYER(effect_layer_get_layer(s_battery_fill_layers[i]), BATTERY_X + BATTERY_BORDER, BATTERY_Y(i) + BATTERY_BORDER, (BATTERY_WIDTH - 2*BATTERY_BORDER)*battery_percent[i]/100, BATTERY_HEIGHT - 2*BATTERY_BORDER);
 	}
 }
@@ -293,7 +293,7 @@ static void background_update_proc(Layer *layer, GContext* ctx){
 		if (battery_percent[i] < 0) continue;
 		graphics_context_set_fill_color(ctx, COLOR_BATTERY_BORDER);
 		graphics_fill_rect(ctx, GRect(BATTERY_X, BATTERY_Y(i), BATTERY_WIDTH, BATTERY_HEIGHT), 0, GCornerNone);
-		graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_WIDTH, BATTERY_Y(i) + BATTERY_HEIGHT/2 - 3, 3, 7), 0, GCornerNone);
+		graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_WIDTH, BATTERY_Y(i) + BATTERY_HEIGHT/2 - 4, 3, 9), 0, GCornerNone);
 		graphics_context_set_fill_color(ctx, COLOR_BATTERY_BKGR);
 		graphics_fill_rect(ctx, GRect(BATTERY_X + BATTERY_BORDER, BATTERY_Y(i) + BATTERY_BORDER, BATTERY_WIDTH - 2*BATTERY_BORDER, BATTERY_HEIGHT - 2*BATTERY_BORDER), 0, GCornerNone);
 	}
@@ -613,13 +613,14 @@ static void handle_tick(struct tm* tick_time, TimeUnits units_changed) {
 	if (init_done && (do_update_weather || (time(NULL) - phone_last_updated >= WEATHER_UPDATE_INTERVAL_MINUTES*60-60)) && request_weather()) do_update_weather = false;
 }
 
-// the battery of the watch (0, "*" while charging) or the phone (1, hidden if unknown): green, orange at <= 20 %, red at <= 10 %;
-// the text is drawn in that color, the fill layer swaps it with the white background
+// the battery of the watch (0, "*" while charging) or the phone (1, hidden if unknown): dark green, brown at <= 20 %, dark red at <= 10 %;
+// the text is drawn in that color, the fill layer swaps it with the white background (white on the charged part)
 static void display_battery(int i) {
 	static char texts[2][8];
-	snprintf(texts[i], sizeof(texts[i]), ((i == 0) && (last_charge_state == 1)) ? "*%d%%" : "%d%%", battery_percent[i]);
+	snprintf(texts[i], sizeof(texts[i]), ((i == 0) && (last_charge_state == 1)) ? "*%d" : "%d", battery_percent[i]);
 	text_layer_set_text(s_battery_text_layers[i], texts[i]);
-	GColor color = (battery_percent[i] > 20) ? GColorIslamicGreen : (battery_percent[i] > 10) ? GColorOrange : GColorRed;
+	// contrast of white on it (and of it on white): 9.1, 5.2, 7.8
+	GColor color = (battery_percent[i] > 20) ? GColorDarkGreen : (battery_percent[i] > 10) ? GColorWindsorTan : GColorDarkCandyAppleRed;
 	text_layer_set_text_color(s_battery_text_layers[i], color);
 	battery_fill_colors[i][0] = color.argb & 0b00111111;
 	battery_fill_colors[i][1] = COLOR_BATTERY_BKGR.argb & 0b00111111;
@@ -792,7 +793,7 @@ static void main_window_load(Window *window) {
 	s_temp_min_max_layer = create_text_layer(s_font_22, COLOR_WEATHER_TEXT);
 	s_date_layer         = create_text_layer(s_font_22sb, COLOR_DATE_TEXT);
 	s_sleep_layer        = create_text_layer(s_font_18sb, COLOR_DATE_TEXT);
-	for (int i = 0; i < 2; i++) s_battery_text_layers[i] = create_text_layer(s_font_16, GColorIslamicGreen);
+	for (int i = 0; i < 2; i++) s_battery_text_layers[i] = create_text_layer(s_font_18sb, GColorDarkGreen);
 	text_layer_set_overflow_mode(s_condition_layer, GTextOverflowModeTrailingEllipsis);
 
 	// after the battery text, so that the effect inverts it too:

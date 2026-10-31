@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
+import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -25,26 +26,36 @@ import java.util.Date
 
 const val PREF_CRASH = "crash" // the stack trace of the last crash (see App)
 
-// Status and the things to do: allow the notification access and the location (trains), send the icons now, set the delay of the notifications.
+// A permission the app needs: its button asks for it, and shows that it is allowed
+class Access(val name: String, val allowed: () -> Boolean, val ask: () -> Unit)
+
+// Status and the things to do: allow each access (notifications; location and activity for the trains), send the icons now, set the delay of the notifications.
 class MainActivity : Activity() {
     private lateinit var status: TextView
+    private val buttons = mutableListOf<Pair<Button, Access>>()
+
+    private fun granted(permission: String) = checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         status = TextView(this).apply { textSize = 16f }
-        val access = Button(this).apply {
-            text = "Notification access"
-            setOnClickListener { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-        }
-        // the location while using the app and the physical activity, then (Android 10+, a second dialog or the settings) the location all the time
-        val location = Button(this).apply {
-            text = "Location and activity access (trains)"
-            setOnClickListener {
-                val missing = (listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION) + if (Build.VERSION.SDK_INT >= 29) listOf(Manifest.permission.ACTIVITY_RECOGNITION) else emptyList()).filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
-                if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1)
-                else if (Build.VERSION.SDK_INT >= 29) requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), 2)
-            }
-        }
+        val accesses = listOf(
+            Access("Notification access (icons, phone battery)", { NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName) }) {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            },
+            Access("Location (trains)", { granted(Manifest.permission.ACCESS_FINE_LOCATION) }) {
+                requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 1)
+            },
+            // Android asks for it only after the location while using the app (Android 11+: in the settings)
+            Access("Location all the time (trains)", { Build.VERSION.SDK_INT < 29 || granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) {
+                if (!granted(Manifest.permission.ACCESS_FINE_LOCATION)) requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), 1)
+                else requestPermissions(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION), 2)
+            },
+            Access("Physical activity (bike, train)", { Build.VERSION.SDK_INT < 29 || granted(Manifest.permission.ACTIVITY_RECOGNITION) }) {
+                requestPermissions(arrayOf(Manifest.permission.ACTIVITY_RECOGNITION), 3)
+            },
+        )
+        for (access in accesses) buttons += Button(this).apply { setOnClickListener { access.ask() } } to access
         val send = Button(this).apply {
             text = "Send icons now"
             setOnClickListener {
@@ -67,11 +78,16 @@ class MainActivity : Activity() {
             }
         }
         setContentView(ScrollView(this).apply {
+            // Android 15 draws the app behind the status bar and the navigation bar: keep the content out of them (else the first button is hidden)
+            if (Build.VERSION.SDK_INT >= 35) setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(48, 96, 48, 48)
-                addView(access)
-                addView(location)
+                for ((button, _) in buttons) addView(button)
                 addView(send)
                 addView(delayLabel)
                 addView(delay)
@@ -92,9 +108,13 @@ class MainActivity : Activity() {
     }
 
     private fun showStatus() {
+        for ((button, access) in buttons) {
+            val allowed = access.allowed()
+            button.text = if (allowed) "${access.name}: allowed" else "Allow ${access.name}"
+            button.isEnabled = !allowed
+        }
         val enabled = NotificationManagerCompat.getEnabledListenerPackages(this).contains(packageName)
         val pebbleApps = DefaultPebbleAndroidAppPicker.getInstance(this).getAllEligibleApps()
-        val granted = { permission: String -> checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED }
         // why Android stopped the app recently: a crash, not responding (ANR, with the main thread from its trace), too many resources...
         val exits = if (Build.VERSION.SDK_INT < 30) "unknown" else getSystemService(ActivityManager::class.java).getHistoricalProcessExitReasons(packageName, 0, 5).joinToString("\n") { exit ->
             val reason = when (exit.reason) {

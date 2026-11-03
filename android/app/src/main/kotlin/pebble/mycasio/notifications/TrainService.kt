@@ -61,6 +61,8 @@ class Station(val name: String, val id: String, val lat: Double, val lon: Double
 val PRESSBAUM = Station("Pressbaum", "1132415", 48.181354, 16.077837)
 val TULLNERBACH = Station("Tullnerbach", "1132421", 48.186065, 16.093289) // Tullnerbach-Pressbaum
 val WESTBAHNHOF = Station("Westbahnhof", "1291501", 48.196870, 16.337607)
+// the morning departures are those via Hütteldorf, not only those to Westbahnhof: during construction work the S50 (and some REX) end there (e.g. 3.-10.11.2026)
+val HUETTELDORF = Station("Hütteldorf", "1191401", 48.197355, 16.261118)
 val HOME_STATIONS = listOf(PRESSBAUM, TULLNERBACH)
 
 val TRAIN_DAYS = setOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.THURSDAY)
@@ -224,7 +226,7 @@ class TrainService : Service() {
             val wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyCasio:trains").apply { acquire(60_000) }
             try {
                 val shown = mode == 1 || inVienna
-                departures = if (!shown) "" else withContext(Dispatchers.IO) { if (mode == 1) fetchDepartures(PRESSBAUM, WESTBAHNHOF) else fetchDepartures(WESTBAHNHOF, PRESSBAUM) } ?: departures
+                departures = if (!shown) "" else withContext(Dispatchers.IO) { if (mode == 1) fetchDepartures(PRESSBAUM, HUETTELDORF, WESTBAHNHOF) else fetchDepartures(WESTBAHNHOF, PRESSBAUM) } ?: departures
                 send()
             } finally {
                 if (wakeLock.isHeld) wakeLock.release()
@@ -232,9 +234,9 @@ class TrainService : Service() {
         }
     }
 
-    // like the departure board (ÖBB Scotty), see KEY_TRAIN_DEPARTURES; null on errors
-    private fun fetchDepartures(from: Station, to: Station): String? = try {
-        val url = URL("https://fahrplan.oebb.at/bin/stboard.exe/dn?L=vs_scotty.vs_liveticker&evaId=${from.id}&dirInput=${to.id}&boardType=dep&productsFilter=1111111111111&tickerID=dep&start=yes&eqstops=false&maxJourneys=10&additionalTime=0&outputMode=tickerDataOnly")
+    // like the departure board (ÖBB Scotty), see KEY_TRAIN_DEPARTURES; the type in lowercase if the train ends before `to` (e.g. at Hütteldorf); null on errors
+    private fun fetchDepartures(from: Station, via: Station, to: Station? = null): String? = try {
+        val url = URL("https://fahrplan.oebb.at/bin/stboard.exe/dn?L=vs_scotty.vs_liveticker&evaId=${from.id}&dirInput=${via.id}&boardType=dep&productsFilter=1111111111111&tickerID=dep&start=yes&eqstops=false&maxJourneys=10&additionalTime=0&outputMode=tickerDataOnly")
         val connection = (url.openConnection() as HttpURLConnection).apply { connectTimeout = 15_000; readTimeout = 15_000 }
         val text = try { connection.inputStream.bufferedReader(Charsets.ISO_8859_1).readText() } finally { connection.disconnect() }
         val journeys = JSONObject(text.substring(text.indexOf('{'))).getJSONArray("journey") // the answer is "journeysObj = {...}"
@@ -247,7 +249,8 @@ class TrainService : Service() {
             val expected = rt?.optString("dlt")?.takeIf { TIME.matches(it) } ?: time
             val delayed = !cancelled && expected != time
             val product = journey.getString("pr")
-            val type = if (product.startsWith("S")) "S" else if (product.startsWith("REX")) "X" else product.take(1)
+            val type = (if (product.startsWith("S")) "S" else if (product.startsWith("REX")) "X" else product.take(1).uppercase())
+                .let { if (to != null && to.name !in journey.optString("lastStop", journey.optString("st"))) it.lowercase() else it }
             expected.replace(":", "") + type + (if (cancelled) "C" else if (delayed) "D" else "0")
         }.take(10).joinToString("")
     } catch (e: Exception) {

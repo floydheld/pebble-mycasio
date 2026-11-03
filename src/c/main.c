@@ -370,7 +370,7 @@ static void notif_update_proc(Layer *layer, GContext* ctx) {
 	}
 }
 
-// the next departures, e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through
+// the next departures, e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through, underlined ones end before Westbahnhof (lowercase type)
 static void trains_update_proc(Layer *layer, GContext* ctx) {
 	time_t now = time(NULL);
 	struct tm *now_tm = localtime(&now);
@@ -383,14 +383,16 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 	for (int row = 0; row < 2; row++){
 		char texts[4][12], status[4];
 		int widths[4], n = 0, w = -TRAIN_GAP;
-		bool rex[4];
+		bool rex[4], ends_before[4];
 		while ((n < 4) && (d < count)){
 			const char *p = departures + 6*d;
 			int hour = (p[0] - '0')*10 + p[1] - '0', min = (p[2] - '0')*10 + p[3] - '0';
 			if (hour*60 + min < t){ d++; continue; } // departed
-			rex[n] = (p[4] == 'X');
+			char type = (p[4] >= 'a' && p[4] <= 'z') ? p[4] - 'a' + 'A' : p[4];
+			ends_before[n] = (type != p[4]);
+			rex[n] = (type == 'X');
 			if (rex[n]) snprintf(texts[n], sizeof(texts[n]), "%d:%02d", hour, min);
-			else snprintf(texts[n], sizeof(texts[n]), "%d:%02d%c", hour, min, (p[4] == 'S') ? 's' : p[4]);
+			else snprintf(texts[n], sizeof(texts[n]), "%d:%02d%c", hour, min, (type == 'S') ? 's' : type);
 			widths[n] = graphics_text_layout_get_content_size(texts[n], fonts_get_system_font(rex[n] ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD),GRect(0, 0, 200, 40), GTextOverflowModeFill, GTextAlignmentLeft).w;
 			if (w + TRAIN_GAP + widths[n] > 200) break;
 			w += TRAIN_GAP + widths[n];
@@ -407,6 +409,10 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 				graphics_context_set_stroke_color(ctx, GColorDarkGray);
 				graphics_context_set_stroke_width(ctx, 2);
 				graphics_draw_line(ctx, GPoint(x, y + top + h/2), GPoint(x + widths[i], y + top + h/2));
+			}
+			if (ends_before[i]){ // 2 px below the baseline, in the color of the text
+				graphics_context_set_fill_color(ctx, (status[i] == 'D') ? GColorRed : (status[i] == 'C') ? GColorDarkGray : COLOR_DATE_TEXT);
+				graphics_fill_rect(ctx, GRect(x, y + top + h + 2, widths[i], 2), 0, GCornerNone);
 			}
 			x += widths[i] + TRAIN_GAP;
 		}

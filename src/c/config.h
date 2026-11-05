@@ -12,7 +12,8 @@
 
 // ÖBB departures in the two bottom rows (instead of the date and the sleep) and a note instead of the weather condition, sent by the Android app (TrainService.kt, also the days and times):
 // mornings from Pressbaum to Wien Westbahnhof until on the train, evenings in Vienna back to Pressbaum until on the train, and where the bike is until got off.
-// They are shown until the Android app clears them or the departures are gone; only those of today.
+// They are shown until the Android app clears them or the departures are gone; only those of today. In the morning only 20 minutes after getting up
+// (the end of the last sleep of Pebble Health, TRAINS_AFTER_WAKE_MINUTES in main.c; until then also no notification icons, every day), in the evening fewer and bigger.
 
 // wind speed in km/h from which on 1, 2, 3, 4 wind lines are drawn over the weather icon (Beaufort 3, 4, 6, 8)
 #define WIND_LINES_1 12

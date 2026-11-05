@@ -100,6 +100,18 @@
                     "file": "fonts/Montserrat-Medium.ttf",
                     "name": "FONT_TEXT_36",
                     "type": "font"
+                },
+                {
+                    "characterRegex": "[0-9:A-Za-z]",
+                    "file": "fonts/Montserrat-SemiBold.ttf",
+                    "name": "FONT_TRAIN_26",
+                    "type": "font"
+                },
+                {
+                    "characterRegex": "[0-9:A-Za-z]",
+                    "file": "fonts/Montserrat-SemiBold.ttf",
+                    "name": "FONT_TRAIN_30",
+                    "type": "font"
                 }
             ]
         },

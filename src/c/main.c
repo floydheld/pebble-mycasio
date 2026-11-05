@@ -29,7 +29,12 @@ pebble install --phone <ip address>
 #define COLON_X         (TIME_X + 2*(DIGIT_WIDTH + DIGIT_GAP))
 #define RAIN_WIDTH      48 // next rain indicator between weather icon and temperature
 #define TRAIN_GAP       6  // between the departures
+#define TRAIN_GAP_BIG   12 // between the bigger ones of the evening
 #define MAX_DEPARTURES  10
+#define TRAINS_PER_ROW  4  // at most, as many as fit
+#define TRAINS_PER_ROW_EVENING 2 // fewer and bigger in the evening (from TRAINS_EVENING_HOUR)
+#define TRAINS_EVENING_HOUR 12
+#define TRAINS_AFTER_WAKE_MINUTES 20 // morning: the departures and the notification icons only this long after getting up (the end of the last sleep of Pebble Health)
 #define NOTIF_ICON_SIZE 27 // notification icons of the phone in the bottom row instead of the sleep, as high as the row (ICON_SIZE in the Android app)
 #define NOTIF_ICON_BYTES ((NOTIF_ICON_SIZE*NOTIF_ICON_SIZE + 7)/8)
 #define NOTIF_ICON_GAP  4
@@ -37,7 +42,7 @@ pebble install --phone <ip address>
 
 // All texts except the time and the departures are in Montserrat Medium (the last update in Montserrat Regular, the date, the sleep and the batteries in Montserrat SemiBold), in the sizes of the names. Measured glyph extents (like the
 // Pebble font generator renders them): top offset of the capitals and digits within the text layer, their height down to the baseline, and the descenders.
-// The departures are in the system font Gothic Bold, GOTHIC_* measured in the emulator.
+// The departures are in the system font Gothic Bold, GOTHIC_* measured in the emulator; in the evening bigger in Montserrat SemiBold (TRAIN_*).
 #define TEXT_14_TOP          3
 #define TEXT_14_H            10
 #define TEXT_16_TOP          3
@@ -60,6 +65,10 @@ pebble install --phone <ip address>
 #define GOTHIC_24_H          14
 #define GOTHIC_28_TOP        10
 #define GOTHIC_28_H          18
+#define TRAIN_26_TOP         8
+#define TRAIN_26_H           18
+#define TRAIN_30_TOP         9
+#define TRAIN_30_H           21
 
 #define LOCATION_Y   0
 #define LOCATION_H   (TEXT_16_H + 2*PADDING)
@@ -119,6 +128,7 @@ static TextLayer *s_location_layer;
 static TextLayer *s_last_update_layer;
 static TextLayer *s_condition_layer;
 static GFont s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36; // see TEXT_*, sb = SemiBold
+static GFont s_font_train_26, s_font_train_30; // the departures of the evening, see TRAIN_*
 static TextLayer *s_temp_min_max_layer;
 static TextLayer *s_date_layer;
 static TextLayer *s_sleep_layer;
@@ -162,6 +172,7 @@ static GColor icon_color;
 static GColor icon_bkgr_color;
 static bool trains_shown = false; // the departures cover the date and the bottom row
 static bool note_shown = false;   // the note of the trains replaces the weather condition
+static bool waking = false;       // in the morning until TRAINS_AFTER_WAKE_MINUTES after getting up: no departures, no notification icons
 static bool phone_dnd = false;    // see KEY_PHONE_DND, not persisted
 static GColor clock_color;        // COLOR_CLOCK or COLOR_CLOCK_QUIET
 
@@ -370,7 +381,8 @@ static void notif_update_proc(Layer *layer, GContext* ctx) {
 	}
 }
 
-// the next departures, e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through, underlined ones end before Westbahnhof (lowercase type)
+// the next departures, e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through, underlined ones end before Westbahnhof (lowercase type);
+// in the evening fewer (TRAINS_PER_ROW_EVENING) and bigger
 static void trains_update_proc(Layer *layer, GContext* ctx) {
 	time_t now = time(NULL);
 	struct tm *now_tm = localtime(&now);
@@ -379,12 +391,16 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 	// the battery and the phone battery are covered, the layer is above them:
 	graphics_context_set_fill_color(ctx, COLOR_DATE_BKGR);
 	for (int row = 0; row < 2; row++) graphics_fill_rect(ctx, GRect(0, row_top[row], 200, row_h[row]), 0, GCornerNone);
+	bool evening = (now_tm->tm_hour >= TRAINS_EVENING_HOUR);
+	GFont font_s = evening ? s_font_train_26 : fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), font_x = evening ? s_font_train_30 : fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD); // S-Bahn etc., REX
+	int top_s = evening ? TRAIN_26_TOP : GOTHIC_24_TOP, h_s = evening ? TRAIN_26_H : GOTHIC_24_H, top_x = evening ? TRAIN_30_TOP : GOTHIC_28_TOP, h_x = evening ? TRAIN_30_H : GOTHIC_28_H;
+	int per_row = evening ? TRAINS_PER_ROW_EVENING : TRAINS_PER_ROW, gap = evening ? TRAIN_GAP_BIG : TRAIN_GAP;
 	int count = strlen(departures)/6, d = 0;
 	for (int row = 0; row < 2; row++){
-		char texts[4][12], status[4];
-		int widths[4], n = 0, w = -TRAIN_GAP;
-		bool rex[4], ends_before[4];
-		while ((n < 4) && (d < count)){
+		char texts[TRAINS_PER_ROW][12], status[TRAINS_PER_ROW];
+		int widths[TRAINS_PER_ROW], n = 0, w = -gap;
+		bool rex[TRAINS_PER_ROW], ends_before[TRAINS_PER_ROW];
+		while ((n < per_row) && (d < count)){
 			const char *p = departures + 6*d;
 			int hour = (p[0] - '0')*10 + p[1] - '0', min = (p[2] - '0')*10 + p[3] - '0';
 			if (hour*60 + min < t){ d++; continue; } // departed
@@ -393,18 +409,18 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 			rex[n] = (type == 'X');
 			if (rex[n]) snprintf(texts[n], sizeof(texts[n]), "%d:%02d", hour, min);
 			else snprintf(texts[n], sizeof(texts[n]), "%d:%02d%c", hour, min, (type == 'S') ? 's' : type);
-			widths[n] = graphics_text_layout_get_content_size(texts[n], fonts_get_system_font(rex[n] ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD),GRect(0, 0, 200, 40), GTextOverflowModeFill, GTextAlignmentLeft).w;
-			if (w + TRAIN_GAP + widths[n] > 200) break;
-			w += TRAIN_GAP + widths[n];
+			widths[n] = graphics_text_layout_get_content_size(texts[n], rex[n] ? font_x : font_s, GRect(0, 0, 200, 40), GTextOverflowModeFill, GTextAlignmentLeft).w;
+			if (w + gap + widths[n] > 200) break;
+			w += gap + widths[n];
 			status[n++] = p[5];
 			d++;
 		}
 		int x = (200 - w)/2;
 		for (int i = 0; i < n; i++){
 			// the digits are vertically centered in the row
-			int top = rex[i] ? GOTHIC_28_TOP : GOTHIC_24_TOP, h = rex[i] ? GOTHIC_28_H : GOTHIC_24_H, y = TEXT_Y(row_top[row], row_h[row], top, h);
+			int top = rex[i] ? top_x : top_s, h = rex[i] ? h_x : h_s, y = TEXT_Y(row_top[row], row_h[row], top, h);
 			graphics_context_set_text_color(ctx, (status[i] == 'D') ? GColorRed : (status[i] == 'C') ? GColorDarkGray : COLOR_DATE_TEXT);
-			graphics_draw_text(ctx, texts[i], fonts_get_system_font(rex[i] ? FONT_KEY_GOTHIC_28_BOLD : FONT_KEY_GOTHIC_24_BOLD),GRect(x, y, widths[i] + 4, 40), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+			graphics_draw_text(ctx, texts[i], rex[i] ? font_x : font_s, GRect(x, y, widths[i] + 4, 40), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 			if (status[i] == 'C'){
 				graphics_context_set_stroke_color(ctx, GColorDarkGray);
 				graphics_context_set_stroke_width(ctx, 2);
@@ -414,7 +430,7 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 				graphics_context_set_fill_color(ctx, (status[i] == 'D') ? GColorRed : (status[i] == 'C') ? GColorDarkGray : COLOR_DATE_TEXT);
 				graphics_fill_rect(ctx, GRect(x, y + top + h + 2, widths[i], 2), 0, GCornerNone);
 			}
-			x += widths[i] + TRAIN_GAP;
+			x += widths[i] + gap;
 		}
 	}
 }
@@ -556,12 +572,28 @@ static void update_clock_color(void) {
 
 // the notification icons replace the sleep if there are any; the departures cover the bottom row
 static void update_bottom_row(void) {
-	layer_set_hidden(text_layer_get_layer(s_sleep_layer), trains_shown || (notif_icons[0] > 0));
-	layer_set_hidden(s_notif_layer, notif_icons[0] == 0);
+	bool icons = (notif_icons[0] > 0) && !waking;
+	layer_set_hidden(text_layer_get_layer(s_sleep_layer), trains_shown || icons);
+	layer_set_hidden(s_notif_layer, !icons);
 	layer_mark_dirty(s_notif_layer);
 }
 
-// the departures replace the date and the sleep, the note the weather condition, until the Android app clears them; only those of today
+static bool latest_sleep_end(HealthActivity activity, time_t time_start, time_t time_end, void *context) {
+	if (time_end > *(time_t *)context) *(time_t *)context = time_end;
+	return true;
+}
+
+// morning: true while asleep and until TRAINS_AFTER_WAKE_MINUTES after the end of the last sleep (of the last 12 hours, Pebble Health); false without sleep data
+static bool just_got_up(time_t now) {
+	HealthActivityMask sleep = HealthActivitySleep | HealthActivityRestfulSleep;
+	if (health_service_peek_current_activities() & sleep) return true;
+	time_t end = 0;
+	health_service_activities_iterate(sleep, now - 12*3600, now, HealthIterationDirectionPast, latest_sleep_end, &end);
+	return (end > 0) && (now < end + TRAINS_AFTER_WAKE_MINUTES*60);
+}
+
+// the departures replace the date and the sleep, the note the weather condition, until the Android app clears them; only those of today;
+// in the morning the departures and the notification icons only TRAINS_AFTER_WAKE_MINUTES after getting up (every day)
 static void update_trains(void) {
 	int updated_yday = localtime(&train_last_updated)->tm_yday;
 	time_t now = time(NULL);
@@ -573,6 +605,12 @@ static void update_trains(void) {
 	for (int d = 0; fresh && !shown && (d < (int)strlen(departures)/6); d++){
 		const char *p = departures + 6*d;
 		shown = ((p[0] - '0')*600 + (p[1] - '0')*60 + (p[2] - '0')*10 + p[3] - '0' >= t);
+	}
+	bool wake = (now_tm->tm_hour < TRAINS_EVENING_HOUR) && just_got_up(now);
+	if (wake) shown = false;
+	if (wake != waking){
+		waking = wake;
+		update_bottom_row();
 	}
 	if (shown != trains_shown){
 		trains_shown = shown;
@@ -791,6 +829,8 @@ static void main_window_load(Window *window) {
 	s_font_24  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_24));
 	s_font_32  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_32));
 	s_font_36  = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TEXT_36));
+	s_font_train_26 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TRAIN_26));
+	s_font_train_30 = fonts_load_custom_font(resource_get_handle(RESOURCE_ID_FONT_TRAIN_30));
 
 	s_temp_layer         = create_text_layer(s_font_36, COLOR_WEATHER_TEXT);
 	s_location_layer    = create_text_layer(s_font_16, COLOR_HEADER_TEXT);
@@ -864,8 +904,8 @@ static void main_window_unload(Window *window) {
 	text_layer_destroy(s_date_layer);
 	text_layer_destroy(s_sleep_layer);
 	for (int i = 0; i < 2; i++) text_layer_destroy(s_battery_text_layers[i]);
-	GFont fonts[10] = {s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36};
-	for (int i = 0; i < 10; i++) fonts_unload_custom_font(fonts[i]);
+	GFont fonts[12] = {s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36, s_font_train_26, s_font_train_30};
+	for (int i = 0; i < 12; i++) fonts_unload_custom_font(fonts[i]);
 }
 
 int main(void) {

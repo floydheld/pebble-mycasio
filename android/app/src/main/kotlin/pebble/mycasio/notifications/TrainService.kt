@@ -65,7 +65,7 @@ val WESTBAHNHOF = Station("Westbahnhof", "1291501", 48.196870, 16.337607)
 val HUETTELDORF = Station("Hütteldorf", "1191401", 48.197355, 16.261118)
 val HOME_STATIONS = listOf(PRESSBAUM, TULLNERBACH)
 
-val TRAIN_DAYS = setOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.THURSDAY)
+val TRAIN_DAYS = setOf(DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.THURSDAY) // also TRAIN_DAY in the watchface (config.h)
 val MORNING = LocalTime.of(6, 30) to LocalTime.of(10, 0) // the ends at the latest, e.g. without a position
 val EVENING = LocalTime.of(16, 0) to LocalTime.MAX // the end only because the departures are times of the day
 const val UPDATE_MINUTES = 5L    // the departures

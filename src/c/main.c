@@ -593,7 +593,7 @@ static bool just_got_up(time_t now) {
 }
 
 // the departures replace the date and the sleep, the note the weather condition, until the Android app clears them; only those of today;
-// in the morning the departures and the notification icons only TRAINS_AFTER_WAKE_MINUTES after getting up (every day)
+// on the train days (TRAIN_DAY) in the morning the departures and the notification icons only TRAINS_AFTER_WAKE_MINUTES after getting up
 static void update_trains(void) {
 	int updated_yday = localtime(&train_last_updated)->tm_yday;
 	time_t now = time(NULL);
@@ -606,7 +606,7 @@ static void update_trains(void) {
 		const char *p = departures + 6*d;
 		shown = ((p[0] - '0')*600 + (p[1] - '0')*60 + (p[2] - '0')*10 + p[3] - '0' >= t);
 	}
-	bool wake = (now_tm->tm_hour < TRAINS_EVENING_HOUR) && just_got_up(now);
+	bool wake = TRAIN_DAY(now_tm->tm_wday) && (now_tm->tm_hour < TRAINS_EVENING_HOUR) && just_got_up(now);
 	if (wake) shown = false;
 	if (wake != waking){
 		waking = wake;

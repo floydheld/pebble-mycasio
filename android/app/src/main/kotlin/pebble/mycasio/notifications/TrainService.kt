@@ -9,6 +9,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,6 +19,8 @@ import android.location.LocationManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
+import android.service.notification.NotificationListenerService
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
@@ -50,6 +53,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 const val KEY_TRAIN_DEPARTURES = 120u // messageKeys in the watchface's package.json
 const val KEY_TRAIN_NOTE = 124u
@@ -79,11 +83,13 @@ const val TRACK_ACCURACY = 150f  // m: positions at least this accurate are kept
 const val WALKING_KMH = 10f      // slower = not on the bike or the train any more
 const val BIKE_RADIUS = 500f     // m: the bike is at the station within this distance of where the ride ended
 const val TRACK_MAX_AGE_MS = 5 * 60_000L // a position older than this before the end of the ride does not tell where it ended
+const val FRESH_MS = 2 * 60_000L   // older positions (e.g. the last one from before a restart of the phone) do not count for leaving the area
 const val HOME_MS = 15 * 60_000L // evening: the note stays until in the area of Pressbaum this long
 const val PREF_TRAIN_DONE = "train_done" // "2026-10-15/1": the morning (1) / evening (2) of that day is over
 const val PREF_BIKE = "bike_station"     // name of the station of the bike, or BIKE_HOME
 const val BIKE_HOME = "daheim"           // walked to the train: no bike ride this morning
 const val PREF_BIKE_DATE = "bike_date"   // the day when it was left there
+const val PREF_TRAIN_LOG = "train_log"   // see trainLog
 val TIME = Regex("\\d\\d:\\d\\d")         // a time of the departures ("ti", "dlt")
 
 // 1 = morning, 2 = evening, 0 = no trains now (also when that morning / evening is over)
@@ -98,6 +104,13 @@ fun trainMode(context: Context, now: LocalDateTime = LocalDateTime.now()): Int {
 fun bikeAt(context: Context): String? {
     val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     return if (prefs.getString(PREF_BIKE_DATE, null) == LocalDate.now().toString()) prefs.getString(PREF_BIKE, null) else null
+}
+
+// the last lines of what the trains did, kept over restarts of the app and the phone (the status in MainActivity is lost then)
+fun trainLog(context: Context, text: String) {
+    val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    val line = "${LocalDateTime.now().format(DateTimeFormatter.ofPattern("EEE dd.MM. HH:mm:ss"))} $text"
+    prefs.edit { putString(PREF_TRAIN_LOG, ((prefs.getString(PREF_TRAIN_LOG, null)?.lines() ?: emptyList()) + line).takeLast(40).joinToString("\n")) }
 }
 
 // exact (on time also when the phone sleeps), unless denied in the settings (Android 12)
@@ -126,13 +139,29 @@ class TrainReceiver : BroadcastReceiver() {
         val located = context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED && (Build.VERSION.SDK_INT < 29 || context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED)
         if (!located && TrainService.instance == null) {
             TrainService.status = "not started: no location access all the time"
+            trainLog(context, TrainService.status)
             return scheduleTrains(context, true)
         }
         try {
             context.startForegroundService(Intent(context, TrainService::class.java))
         } catch (e: Exception) { // e.g. not allowed from the background without the exact alarms
             TrainService.status = "could not start: $e"
+            trainLog(context, TrainService.status)
             scheduleTrains(context, true)
+        }
+    }
+}
+
+// After a restart of the phone Android has forgotten the alarms (also after an update of the app): the trains again. Not only when the
+// notification listener connects (NotificationIconService.onListenerConnected), Android does not always bind it again after a restart.
+class BootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        trainLog(context, intent.action?.substringAfterLast('.') ?: "started")
+        if (TrainService.instance == null) scheduleTrains(context, false)
+        try {
+            NotificationListenerService.requestRebind(ComponentName(context, NotificationIconService::class.java))
+        } catch (e: Exception) { // no notification access
+            trainLog(context, "notification listener: $e")
         }
     }
 }
@@ -165,6 +194,9 @@ class TrainService : Service() {
     private var rode = false                   // morning: a bike ride was recognized (else walked to the train, the bike is at home)
     private var bikeParked = false             // morning: the last bike ride ended at a station (else the bike is where the train was boarded)
     private var precise: Boolean? = null       // GPS or the power saving location, null = none requested
+    private var located = false                // a position since the start of the morning / evening (for trainLog)
+    private var sent: String? = null           // how the last sending went (for trainLog)
+    private var transitionsSince = 0L          // morning: the activity transitions were requested then (ns of elapsedRealtime); earlier ones are old
     private val listener = LocationListenerCompat { onLocation(it) }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -189,6 +221,7 @@ class TrainService : Service() {
             ServiceCompat.startForeground(this, 1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
         } catch (e: Exception) { // no location permission (all the time)
             status = "could not start: $e"
+            trainLog(this, status)
             stopSelf()
             scheduleTrains(this, true)
             return START_NOT_STICKY
@@ -200,6 +233,7 @@ class TrainService : Service() {
         }
         if (mode != this.mode) {
             this.mode = mode
+            trainLog(this, "start ${if (mode == 1) "morning" else "evening"}")
             departures = ""
             inVienna = false
             wasInVienna = false
@@ -211,6 +245,8 @@ class TrainService : Service() {
             bikeParked = false
             activities = ""
             precise = null
+            located = false
+            sent = null
             requestLocation(false)
             requestTransitions(mode == 1)
         }
@@ -264,7 +300,10 @@ class TrainService : Service() {
         val sender = DefaultPebbleSender(applicationContext)
         try {
             val result = sender.sendDataToPebble(WATCHFACE_UUID, mapOf(KEY_TRAIN_DEPARTURES to PebbleDictionaryItem.Text(departures), KEY_TRAIN_NOTE to PebbleDictionaryItem.Text(note)))
-            lastSend = "${LocalTime.now().withNano(0)} \"$note\" $departures: " + (result?.values?.joinToString { it.javaClass.simpleName } ?: "no Pebble app found")
+            val outcome = result?.values?.joinToString { it.javaClass.simpleName } ?: "no Pebble app found"
+            lastSend = "${LocalTime.now().withNano(0)} \"$note\" $departures: $outcome"
+            if (outcome != sent) trainLog(this, "sent \"$note\" $departures: $outcome")
+            sent = outcome
             return !result.isNullOrEmpty() && result.values.all { it == TransmissionResult.Success }
         } finally {
             try { sender.close() } catch (e: IllegalArgumentException) {} // "Service not registered": cancelled (by the next update) before PebbleKit was bound to the Pebble app
@@ -280,6 +319,7 @@ class TrainService : Service() {
     private fun finish(done: Boolean) {
         if (done) getSharedPreferences(PREFS, MODE_PRIVATE).edit { putString(PREF_TRAIN_DONE, "${LocalDate.now()}/$mode") }
         status = "${if (done) "done" else "over"} at ${LocalTime.now().withNano(0)}"
+        trainLog(this, status)
         mode = 0
         departures = ""
         fetching?.cancel()
@@ -305,6 +345,7 @@ class TrainService : Service() {
             LocationManagerCompat.requestLocationUpdates(manager, provider, request, ContextCompat.getMainExecutor(this), listener)
         } catch (e: Exception) {
             status = "location: $e"
+            trainLog(this, status)
         }
     }
 
@@ -313,15 +354,17 @@ class TrainService : Service() {
     private fun requestTransitions(on: Boolean) {
         val intent = PendingIntent.getBroadcast(this, 2, Intent(this, TransitionReceiver::class.java), PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT) // Google Play services adds the result
         val client = ActivityRecognition.getClient(this)
+        if (on) transitionsSince = SystemClock.elapsedRealtimeNanos()
         try {
             if (!on) client.removeActivityTransitionUpdates(intent)
             else client.requestActivityTransitionUpdates(ActivityTransitionRequest(listOf(
                 ActivityTransition.Builder().setActivityType(DetectedActivity.ON_BICYCLE).setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER).build(),
                 ActivityTransition.Builder().setActivityType(DetectedActivity.ON_BICYCLE).setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_EXIT).build(),
                 ActivityTransition.Builder().setActivityType(DetectedActivity.IN_VEHICLE).setActivityTransition(ActivityTransition.ACTIVITY_TRANSITION_ENTER).build(),
-            )), intent).addOnFailureListener { activities = "activity recognition failed: $it" }
+            )), intent).addOnFailureListener { activities = "activity recognition failed: $it"; trainLog(this, activities) }
         } catch (e: Exception) { // no permission for the physical activity
             activities = "activity recognition failed: $e"
+            trainLog(this, activities)
         }
     }
 
@@ -332,7 +375,12 @@ class TrainService : Service() {
             val station = stationAt(t)
             val bike = event.activityType == DetectedActivity.ON_BICYCLE
             val enter = event.transitionType == ActivityTransition.ACTIVITY_TRANSITION_ENTER
-            activities += "${LocalTime.now().withNano(0)} ${if (bike) "bike" else "vehicle"} ${if (enter) "start" else "end"} at ${station?.name ?: "?"}\n"
+            val activity = "${if (bike) "bike" else "vehicle"} ${if (enter) "start" else "end"} at ${station?.name ?: "?"}"
+            // Google Play services can report an activity that began before the request (e.g. after a restart of the phone): not on the train yet
+            val old = event.elapsedRealTimeNanos < transitionsSince
+            activities += "${LocalTime.now().withNano(0)} $activity${if (old) " (old, ignored)" else ""}\n"
+            trainLog(this, "$activity${if (old) " ${(transitionsSince - event.elapsedRealTimeNanos) / 1_000_000_000} s before the request, ignored" else ""}")
+            if (old) continue
             if (bike) rode = true
             if (bike && enter) bikeParked = false
             else if (bike) { // the ride ended
@@ -345,7 +393,10 @@ class TrainService : Service() {
         }
     }
 
-    private fun saveBike(at: String?) = getSharedPreferences(PREFS, MODE_PRIVATE).edit { putString(PREF_BIKE, at); putString(PREF_BIKE_DATE, LocalDate.now().toString()) }
+    private fun saveBike(at: String?) {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit { putString(PREF_BIKE, at); putString(PREF_BIKE_DATE, LocalDate.now().toString()) }
+        trainLog(this, "bike at ${at ?: "?"}")
+    }
 
     // the station within BIKE_RADIUS of where the phone was at t (ms of elapsedRealtime): the last position before it that was not faster than walking
     // (the activity recognition can be late, e.g. already on the train), null if none
@@ -365,12 +416,16 @@ class TrainService : Service() {
             else -> null
         }
         val now = fix.elapsedRealtimeNanos / 1_000_000
+        if (!located) trainLog(this, "first position: ${fix.provider} ±${fix.accuracy.toInt()} m, ${PRESSBAUM.distance(fix).toInt()} m from Pressbaum")
+        located = true
         if (mode == 1) {
             if (first == null && fix.accuracy < 200) first = fix
             if (fix.accuracy < TRACK_ACCURACY) track += fix to kmh
             if (track.size > 2000) track.removeAt(0)
             status = "morning, ${LocalTime.now().withNano(0)}: ${fix.provider} ±${fix.accuracy.toInt()} m, ${kmh?.toInt() ?: "?"} km/h, bike ${bikeAt(this) ?: "?"}"
-            if (PRESSBAUM.distance(fix) > AREA_RADIUS) { // on the train, the activity recognition missed it
+            // on the train, the activity recognition missed it; surely out of the area: a fresh position, also with its inaccuracy (after a restart of the phone the first ones can be off by kilometres)
+            if (PRESSBAUM.distance(fix) - fix.accuracy > AREA_RADIUS && SystemClock.elapsedRealtimeNanos() - fix.elapsedRealtimeNanos < FRESH_MS * 1_000_000) {
+                trainLog(this, "left the area: ${fix.provider} ±${fix.accuracy.toInt()} m, ${PRESSBAUM.distance(fix).toInt()} m from Pressbaum")
                 if (!bikeParked) saveBike(if (rode) stationAt(now)?.name else BIKE_HOME)
                 return finish(true)
             }

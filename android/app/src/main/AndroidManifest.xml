@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- the alarms of the trains again after a restart of the phone (BootReceiver) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- the trains (TrainService): the departures, and the location also in the background ("Allow all the time") to know the station and where the bike is -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
@@ -43,6 +45,12 @@
         <receiver android:name=".DueReceiver" android:exported="false"/>
         <receiver android:name=".TrainReceiver" android:exported="false"/>
         <receiver android:name=".TransitionReceiver" android:exported="false"/>
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+            </intent-filter>
+        </receiver>
         <service android:name=".TrainService" android:exported="false" android:foregroundServiceType="location"/>
 
         <service android:name=".PebbleListenerService"

@@ -130,6 +130,7 @@ class MainActivity : Activity() {
             val trace = if (exit.reason != ApplicationExitInfo.REASON_ANR) "" else try { exit.traceInputStream?.bufferedReader()?.use { it.readText() }?.substringAfter("\"main\"", "")?.lines()?.take(20)?.joinToString("\n", "\n") ?: "" } catch (e: Exception) { "" }
             "${DateFormat.getDateTimeInstance().format(Date(exit.timestamp))}: $reason, ${exit.description}$trace"
         }.ifEmpty { "none" }
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
         val location = when {
             !granted(Manifest.permission.ACCESS_FINE_LOCATION) -> "NOT allowed"
             Build.VERSION.SDK_INT >= 29 && !granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION) -> "only while using the app (NOT enough)"
@@ -146,8 +147,9 @@ class MainActivity : Activity() {
             "Last send: ${TrainService.lastSend}\n" +
             "Activities this morning:\n${TrainService.activities}\n" +
             "Notifications:\n${NotificationIconService.lastReport}\n" +
+            "Trains log:\n${prefs.getString(PREF_TRAIN_LOG, null) ?: "empty"}\n\n" +
             "Last stops of the app (by Android):\n$exits\n\n" +
-            "Last crash:\n${getSharedPreferences(PREFS, MODE_PRIVATE).getString(PREF_CRASH, null) ?: "none"}"
+            "Last crash:\n${prefs.getString(PREF_CRASH, null) ?: "none"}"
     }
 }
 

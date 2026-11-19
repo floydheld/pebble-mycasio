@@ -11,9 +11,9 @@
 #define WEATHER_HIDE_AFTER_MINUTES      120 // the weather is hidden when it is older, e.g. without bluetooth for that long (the location and the age stay)
 
 // ÖBB departures in the two bottom rows (instead of the date and the sleep) and a note instead of the weather condition, sent by the Android app (TrainService.kt, also the days and times):
-// mornings from Pressbaum to Wien Westbahnhof until on the train, evenings in Vienna back to Pressbaum until on the train, and where the bike is until got off.
+// mornings from Pressbaum to Wien Westbahnhof until on the train, evenings in Vienna back to Pressbaum (Tullnerbach-Pressbaum if the bike is there) until on the train, and where the bike is until got off.
 // They are shown until the Android app clears them or the departures are gone; only those of today. In the morning only 20 minutes after getting up
-// (the end of the last sleep of Pebble Health, TRAINS_AFTER_WAKE_MINUTES in main.c; until then also no notification icons), in the evening fewer and bigger.
+// (the end of the last sleep of Pebble Health, TRAINS_AFTER_WAKE_MINUTES in main.c; until then also no notification icons).
 // The train days (tm_wday, 0 = Sunday) as TRAIN_DAYS in TrainService.kt: Monday, Tuesday, Thursday; only on them the notification icons wait for getting up.
 #define TRAIN_DAY(wday) (((wday) == 1) || ((wday) == 2) || ((wday) == 4))
 

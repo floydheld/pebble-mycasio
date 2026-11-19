@@ -28,12 +28,12 @@ pebble install --phone <ip address>
 #define TIME_X          ((200 - 4*DIGIT_WIDTH - 4*DIGIT_GAP - COLON_SIZE)/2)
 #define COLON_X         (TIME_X + 2*(DIGIT_WIDTH + DIGIT_GAP))
 #define RAIN_WIDTH      48 // next rain indicator between weather icon and temperature
-#define TRAIN_GAP       6  // between the departures
-#define TRAIN_GAP_BIG   12 // between the bigger ones of the evening
+#define TRAIN_GAP       12 // between the departures
 #define MAX_DEPARTURES  10
-#define TRAINS_PER_ROW  4  // at most, as many as fit
-#define TRAINS_PER_ROW_EVENING 2 // fewer and bigger in the evening (from TRAINS_EVENING_HOUR)
-#define TRAINS_EVENING_HOUR 12
+#define TRAINS_PER_ROW  2  // at most, as many as fit
+#define TRAINS_EVENING_HOUR 12 // before it the morning: the departures wait for getting up
+#define TRAIN_MARK_GAP  1  // between a departure and its mark
+#define TRAIN_MARK_MAX  5  // "+n" on a departure that arrives at most this many minutes after an earlier one (KEY_TRAIN_ARRIVALS)
 #define TRAINS_AFTER_WAKE_MINUTES 20 // morning: the departures and the notification icons only this long after getting up (the end of the last sleep of Pebble Health)
 #define NOTIF_ICON_SIZE 27 // notification icons of the phone in the bottom row instead of the sleep, as high as the row (ICON_SIZE in the Android app)
 #define NOTIF_ICON_BYTES ((NOTIF_ICON_SIZE*NOTIF_ICON_SIZE + 7)/8)
@@ -42,7 +42,7 @@ pebble install --phone <ip address>
 
 // All texts except the time and the departures are in Montserrat Medium (the last update in Montserrat Regular, the date, the sleep and the batteries in Montserrat SemiBold), in the sizes of the names. Measured glyph extents (like the
 // Pebble font generator renders them): top offset of the capitals and digits within the text layer, their height down to the baseline, and the descenders.
-// The departures are in the system font Gothic Bold, GOTHIC_* measured in the emulator; in the evening bigger in Montserrat SemiBold (TRAIN_*).
+// The departures are in Montserrat SemiBold (TRAIN_*), their "+n" marks in the system font Gothic Bold (GOTHIC_*, measured in the emulator).
 #define TEXT_14_TOP          3
 #define TEXT_14_H            10
 #define TEXT_16_TOP          3
@@ -61,10 +61,7 @@ pebble install --phone <ip address>
 #define TEXT_32_H            22
 #define TEXT_36_TOP          10
 #define TEXT_36_H            25
-#define GOTHIC_24_TOP        10
-#define GOTHIC_24_H          14
-#define GOTHIC_28_TOP        10
-#define GOTHIC_28_H          18
+#define GOTHIC_18_TOP        6
 #define TRAIN_26_TOP         8
 #define TRAIN_26_H           18
 #define TRAIN_30_TOP         9
@@ -128,7 +125,7 @@ static TextLayer *s_location_layer;
 static TextLayer *s_last_update_layer;
 static TextLayer *s_condition_layer;
 static GFont s_font_14, s_font_16, s_font_16r, s_font_18, s_font_18sb, s_font_22, s_font_22sb, s_font_24, s_font_32, s_font_36; // see TEXT_*, sb = SemiBold
-static GFont s_font_train_26, s_font_train_30; // the departures of the evening, see TRAIN_*
+static GFont s_font_train_26, s_font_train_30; // the departures, see TRAIN_*
 static TextLayer *s_temp_min_max_layer;
 static TextLayer *s_date_layer;
 static TextLayer *s_sleep_layer;
@@ -150,6 +147,7 @@ static time_t sun_set_unix_loc  = 0;
 static int warning_location = 0; //0: no warning, 1: red warning (GPS differed from setting), 2: black warning (no GPS)
 static int last_charge_state = 0; //0: discharging; 1: plugged & charging; 2: plugged & full
 static char departures[6*MAX_DEPARTURES + 1]; // see KEY_TRAIN_DEPARTURES
+static char arrivals[4*MAX_DEPARTURES + 1];   // see KEY_TRAIN_ARRIVALS
 static uint8_t notif_icons[1 + MAX_NOTIF_ICONS*NOTIF_ICON_BYTES]; // see KEY_NOTIF_ICONS, not persisted (sent again when the watchface is opened)
 static char train_note[32];   // see KEY_TRAIN_NOTE
 static time_t train_last_updated = 0;
@@ -381,8 +379,17 @@ static void notif_update_proc(Layer *layer, GContext* ctx) {
 	}
 }
 
-// the next departures, e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through, underlined ones end before Westbahnhof (lowercase type);
-// in the evening fewer (TRAINS_PER_ROW_EVENING) and bigger
+// the expected arrival of departure d at the destination in minutes from the start of its day (after midnight + 24 h), -1 if unknown or cancelled
+static int train_arrival(int d){
+	const char *p = departures + 6*d, *a = arrivals + 4*d;
+	if ((int)strlen(arrivals) != 4*((int)strlen(departures)/6) || p[5] == 'C' || a[0] < '0' || a[0] > '9') return -1;
+	int dep = (p[0] - '0')*600 + (p[1] - '0')*60 + (p[2] - '0')*10 + p[3] - '0', arr = (a[0] - '0')*600 + (a[1] - '0')*60 + (a[2] - '0')*10 + a[3] - '0';
+	return (arr < dep) ? arr + 24*60 : arr;
+}
+
+// the next departures (TRAINS_PER_ROW per row), e.g. "6:42s" (S-Bahn) or "6:51" (REX, bigger), centered in the date row and the bottom row (over the battery); delayed ones in red with the expected time, cancelled ones struck through, underlined ones end before Westbahnhof (lowercase type);
+// With the arrivals (KEY_TRAIN_ARRIVALS) of the departures still to come: a small raised "+n" on one that arrives only n (0..TRAIN_MARK_MAX) minutes
+// after the earliest arrival of the earlier ones (waiting for it costs only n minutes), and in gray those that a later one overtakes (arrives earlier).
 static void trains_update_proc(Layer *layer, GContext* ctx) {
 	time_t now = time(NULL);
 	struct tm *now_tm = localtime(&now);
@@ -391,16 +398,23 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 	// the battery and the phone battery are covered, the layer is above them:
 	graphics_context_set_fill_color(ctx, COLOR_DATE_BKGR);
 	for (int row = 0; row < 2; row++) graphics_fill_rect(ctx, GRect(0, row_top[row], 200, row_h[row]), 0, GCornerNone);
-	bool evening = (now_tm->tm_hour >= TRAINS_EVENING_HOUR);
-	GFont font_s = evening ? s_font_train_26 : fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD), font_x = evening ? s_font_train_30 : fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD); // S-Bahn etc., REX
-	int top_s = evening ? TRAIN_26_TOP : GOTHIC_24_TOP, h_s = evening ? TRAIN_26_H : GOTHIC_24_H, top_x = evening ? TRAIN_30_TOP : GOTHIC_28_TOP, h_x = evening ? TRAIN_30_H : GOTHIC_28_H;
-	int per_row = evening ? TRAINS_PER_ROW_EVENING : TRAINS_PER_ROW, gap = evening ? TRAIN_GAP_BIG : TRAIN_GAP;
+	GFont font_s = s_font_train_26, font_x = s_font_train_30; // S-Bahn etc., REX
+	int top_s = TRAIN_26_TOP, h_s = TRAIN_26_H, top_x = TRAIN_30_TOP, h_x = TRAIN_30_H, gap = TRAIN_GAP;
+	GFont font_mark = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
+	int top_mark = GOTHIC_18_TOP;
 	int count = strlen(departures)/6, d = 0;
+	// the arrivals of the departures still to come
+	int arr[MAX_DEPARTURES];
+	for (int e = 0; e < count; e++){
+		const char *p = departures + 6*e;
+		arr[e] = ((p[0] - '0')*600 + (p[1] - '0')*60 + (p[2] - '0')*10 + p[3] - '0' < t) ? -1 : train_arrival(e);
+	}
 	for (int row = 0; row < 2; row++){
-		char texts[TRAINS_PER_ROW][12], status[TRAINS_PER_ROW];
-		int widths[TRAINS_PER_ROW], n = 0, w = -gap;
+		char texts[TRAINS_PER_ROW][12], status[TRAINS_PER_ROW], marks[TRAINS_PER_ROW][4];
+		int widths[TRAINS_PER_ROW], mark_widths[TRAINS_PER_ROW], n = 0, w = -gap;
+		bool overtaken[TRAINS_PER_ROW];
 		bool rex[TRAINS_PER_ROW], ends_before[TRAINS_PER_ROW];
-		while ((n < per_row) && (d < count)){
+		while ((n < TRAINS_PER_ROW) && (d < count)){
 			const char *p = departures + 6*d;
 			int hour = (p[0] - '0')*10 + p[1] - '0', min = (p[2] - '0')*10 + p[3] - '0';
 			if (hour*60 + min < t){ d++; continue; } // departed
@@ -410,8 +424,21 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 			if (rex[n]) snprintf(texts[n], sizeof(texts[n]), "%d:%02d", hour, min);
 			else snprintf(texts[n], sizeof(texts[n]), "%d:%02d%c", hour, min, (type == 'S') ? 's' : type);
 			widths[n] = graphics_text_layout_get_content_size(texts[n], rex[n] ? font_x : font_s, GRect(0, 0, 200, 40), GTextOverflowModeFill, GTextAlignmentLeft).w;
-			if (w + gap + widths[n] > 200) break;
-			w += gap + widths[n];
+			int best = -1;
+			overtaken[n] = false;
+			for (int e = 0; e < count; e++){
+				if (arr[e] < 0 || arr[d] < 0) continue;
+				if ((e < d) && ((best < 0) || (arr[e] < best))) best = arr[e];
+				if ((e > d) && (arr[e] < arr[d])) overtaken[n] = true;
+			}
+			marks[n][0] = 0;
+			mark_widths[n] = 0;
+			if (!overtaken[n] && (best >= 0) && (arr[d] >= best) && (arr[d] - best <= TRAIN_MARK_MAX)){
+				snprintf(marks[n], sizeof(marks[n]), "+%d", arr[d] - best);
+				mark_widths[n] = TRAIN_MARK_GAP + graphics_text_layout_get_content_size(marks[n], font_mark, GRect(0, 0, 200, 40), GTextOverflowModeFill, GTextAlignmentLeft).w;
+			}
+			if (w + gap + widths[n] + mark_widths[n] > 200) break;
+			w += gap + widths[n] + mark_widths[n];
 			status[n++] = p[5];
 			d++;
 		}
@@ -419,18 +446,21 @@ static void trains_update_proc(Layer *layer, GContext* ctx) {
 		for (int i = 0; i < n; i++){
 			// the digits are vertically centered in the row
 			int top = rex[i] ? top_x : top_s, h = rex[i] ? h_x : h_s, y = TEXT_Y(row_top[row], row_h[row], top, h);
-			graphics_context_set_text_color(ctx, (status[i] == 'D') ? GColorRed : (status[i] == 'C') ? GColorDarkGray : COLOR_DATE_TEXT);
+			GColor color = ((status[i] == 'C') || overtaken[i]) ? GColorDarkGray : (status[i] == 'D') ? GColorRed : COLOR_DATE_TEXT;
+			graphics_context_set_text_color(ctx, color);
 			graphics_draw_text(ctx, texts[i], rex[i] ? font_x : font_s, GRect(x, y, widths[i] + 4, 40), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
+			// the mark raised: its top at the top of the digits
+			if (marks[i][0]) graphics_draw_text(ctx, marks[i], font_mark, GRect(x + widths[i] + TRAIN_MARK_GAP, y + top - top_mark, mark_widths[i] + 4, 30), GTextOverflowModeFill, GTextAlignmentLeft, NULL);
 			if (status[i] == 'C'){
 				graphics_context_set_stroke_color(ctx, GColorDarkGray);
 				graphics_context_set_stroke_width(ctx, 2);
 				graphics_draw_line(ctx, GPoint(x, y + top + h/2), GPoint(x + widths[i], y + top + h/2));
 			}
 			if (ends_before[i]){ // 2 px below the baseline, in the color of the text
-				graphics_context_set_fill_color(ctx, (status[i] == 'D') ? GColorRed : (status[i] == 'C') ? GColorDarkGray : COLOR_DATE_TEXT);
+				graphics_context_set_fill_color(ctx, color);
 				graphics_fill_rect(ctx, GRect(x, y + top + h + 2, widths[i], 2), 0, GCornerNone);
 			}
-			x += widths[i] + gap;
+			x += widths[i] + mark_widths[i] + gap;
 		}
 	}
 }
@@ -451,6 +481,7 @@ static void load_data(void) {
 	if (persist_exists(KEY_WARN_LOCATION)) warning_location = persist_read_int(KEY_WARN_LOCATION);
 	if (persist_exists(KEY_BTY_LAST_STATE)) last_charge_state = persist_read_int(KEY_BTY_LAST_STATE);
 	if (persist_exists(KEY_TRAIN_DEPARTURES)) persist_read_string(KEY_TRAIN_DEPARTURES, departures, sizeof(departures));
+	if (persist_exists(KEY_TRAIN_ARRIVALS)) persist_read_string(KEY_TRAIN_ARRIVALS, arrivals, sizeof(arrivals));
 	if (persist_exists(KEY_TRAIN_LAST_UPDATE)) train_last_updated = (time_t)persist_read_int(KEY_TRAIN_LAST_UPDATE);
 	if (persist_exists(KEY_TRAIN_NOTE)) persist_read_string(KEY_TRAIN_NOTE, train_note, sizeof(train_note));
 }
@@ -470,6 +501,7 @@ static void save_data(void) {
 	persist_write_int(KEY_WARN_LOCATION, warning_location);
 	persist_write_int(KEY_BTY_LAST_STATE, last_charge_state);
 	persist_write_string(KEY_TRAIN_DEPARTURES, departures);
+	persist_write_string(KEY_TRAIN_ARRIVALS, arrivals);
 	persist_write_int(KEY_TRAIN_LAST_UPDATE, (int)train_last_updated);
 	persist_write_string(KEY_TRAIN_NOTE, train_note);
 }
@@ -716,6 +748,7 @@ static void health_handler(HealthEventType event, void *context) {
 }
 
 static void inbox_received_callback(DictionaryIterator *iterator, void *context) {
+	bool got_departures = false, got_arrivals = false;
 	for (Tuple *t = dict_read_first(iterator); t != NULL; t = dict_read_next(iterator)) {
 		switch (t->key) {
 			case KEY_LOCATION_NAME:
@@ -743,6 +776,11 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 			case KEY_TRAIN_DEPARTURES:
 				snprintf(departures, sizeof(departures), "%s", t->value->cstring);
 				train_last_updated = time(NULL);
+				got_departures = true;
+				break;
+			case KEY_TRAIN_ARRIVALS:
+				snprintf(arrivals, sizeof(arrivals), "%s", t->value->cstring);
+				got_arrivals = true;
 				break;
 			case KEY_TRAIN_NOTE:
 				snprintf(train_note, sizeof(train_note), "%s", t->value->cstring);
@@ -765,6 +803,7 @@ static void inbox_received_callback(DictionaryIterator *iterator, void *context)
 				break;
 		}
 	}
+	if (got_departures && !got_arrivals) arrivals[0] = 0; // an older Android app: no marks
 	save_data();
 	display_weather();
 	update_icon();

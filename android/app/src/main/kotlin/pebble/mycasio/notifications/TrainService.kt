@@ -56,6 +56,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 const val KEY_TRAIN_DEPARTURES = 120u // messageKeys in the watchface's package.json
+const val KEY_TRAIN_ARRIVALS = 121u
 const val KEY_TRAIN_NOTE = 124u
 
 class Station(val name: String, val id: String, val lat: Double, val lon: Double) {
@@ -78,6 +79,9 @@ const val NEAR_RADIUS = 1000f    // m: in the morning GPS within this distance o
 const val VIENNA_RADIUS = 12000f // m: Vienna around Westbahnhof: the evening departures only there
 const val LEFT_HOME = 250f       // m: in the morning GPS only after moving this far from the first position (not at home)
 const val AREA_RADIUS = 5000f    // m: the area of Pressbaum around PRESSBAUM: leaving it in the morning = on the train; in it for HOME_MS in the evening = home
+// morning: from the arrival of the train to Tscherttegasse (U6), the faster of the two (Wiener Linien timetable 2026, U4 every 4 min, U6 every 3 min):
+const val VIA_U6_MINUTES = 14L // at Westbahnhof: 4 walking to the U6, 1.5 waiting, 8 riding
+const val VIA_U4_MINUTES = 24L // at Hütteldorf: 3 walking to the U4, 2 waiting, 11 to Längenfeldgasse, 1 changing on the platform, 1.5 waiting, 5 on the U6
 const val ACCURATE = 50f         // m: positions at least this accurate count for the speed
 const val TRACK_ACCURACY = 150f  // m: positions at least this accurate are kept for the station of the bike (the stations are 1.3 km apart)
 const val WALKING_KMH = 10f      // slower = not on the bike or the train any more
@@ -91,6 +95,7 @@ const val BIKE_HOME = "daheim"           // walked to the train: no bike ride th
 const val PREF_BIKE_DATE = "bike_date"   // the day when it was left there
 const val PREF_TRAIN_LOG = "train_log"   // see trainLog
 val TIME = Regex("\\d\\d:\\d\\d")         // a time of the departures ("ti", "dlt")
+val HHMM: DateTimeFormatter = DateTimeFormatter.ofPattern("HHmm")
 
 // 1 = morning, 2 = evening, 0 = no trains now (also when that morning / evening is over)
 fun trainMode(context: Context, now: LocalDateTime = LocalDateTime.now()): Int {
@@ -178,7 +183,7 @@ class TransitionReceiver : BroadcastReceiver() {
 // mornings from Pressbaum to Wien Westbahnhof until on the train: Google's activity recognition reports riding in a vehicle (IN_VEHICLE), or out of the area of Pressbaum.
 // The bike is at the station (Pressbaum or Tullnerbach-Pressbaum) where the last bike ride ended (ON_BICYCLE exit), else where the train was boarded (see stationAt);
 // at home (BIKE_HOME) if there was no bike ride (walked to the train).
-// Evenings while in Vienna from Wien Westbahnhof to Pressbaum; once in Vienna the note "Rad: <station>" until in the area of Pressbaum for HOME_MS.
+// Evenings while in Vienna from Wien Westbahnhof to Pressbaum, or Tullnerbach-Pressbaum if the bike is there (then also the S50 that end there, see homeStation); once in Vienna the note "Rad: <station>" until in the area of Pressbaum for HOME_MS.
 // A foreground service with location updates (GPS only near the stations in the morning); TrainReceiver starts it and wakes it every UPDATE_MINUTES.
 class TrainService : Service() {
     private val scope = MainScope() + CoroutineExceptionHandler { _, e -> lastSend = "error: $e" } // e.g. the Pebble app fails: not a crash
@@ -187,6 +192,7 @@ class TrainService : Service() {
     private var wasInVienna = false            // evening: the note from then on
     private var homeSince: Long? = null        // evening: in the area of Pressbaum since (ms of elapsedRealtime)
     private var departures = ""                // see KEY_TRAIN_DEPARTURES
+    private var arrivals = ""                  // see KEY_TRAIN_ARRIVALS
     private var fetching: Job? = null
     private var first: Location? = null        // morning: the first position (at home)
     private var last: Location? = null
@@ -235,6 +241,7 @@ class TrainService : Service() {
             this.mode = mode
             trainLog(this, "start ${if (mode == 1) "morning" else "evening"}")
             departures = ""
+            arrivals = ""
             inVienna = false
             wasInVienna = false
             homeSince = null
@@ -262,7 +269,16 @@ class TrainService : Service() {
             val wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MyCasio:trains").apply { acquire(60_000) }
             try {
                 val shown = mode == 1 || inVienna
-                departures = if (!shown) "" else withContext(Dispatchers.IO) { if (mode == 1) fetchDepartures(PRESSBAUM, HUETTELDORF, WESTBAHNHOF) else fetchDepartures(WESTBAHNHOF, PRESSBAUM) } ?: departures
+                if (!shown) {
+                    departures = ""
+                    arrivals = ""
+                } else withContext(Dispatchers.IO) {
+                    val fetched = if (mode == 1) fetchDepartures(PRESSBAUM, HUETTELDORF, WESTBAHNHOF) else fetchDepartures(WESTBAHNHOF, homeStation())
+                    if (fetched != null) {
+                        departures = fetched.joinToString("") { it.text }
+                        arrivals = fetchArrivals(fetched).joinToString("") { it?.format(HHMM) ?: "----" }
+                    }
+                }
                 send()
             } finally {
                 if (wakeLock.isHeld) wakeLock.release()
@@ -270,28 +286,63 @@ class TrainService : Service() {
         }
     }
 
-    // like the departure board (ÖBB Scotty), see KEY_TRAIN_DEPARTURES; the type in lowercase if the train ends before `to` (e.g. at Hütteldorf); null on errors
-    private fun fetchDepartures(from: Station, via: Station, to: Station? = null): String? = try {
-        val url = URL("https://fahrplan.oebb.at/bin/stboard.exe/dn?L=vs_scotty.vs_liveticker&evaId=${from.id}&dirInput=${via.id}&boardType=dep&productsFilter=1111111111111&tickerID=dep&start=yes&eqstops=false&maxJourneys=10&additionalTime=0&outputMode=tickerDataOnly")
+    // a departure: the id of its journey (the same on the arrival boards) and its 6 characters of KEY_TRAIN_DEPARTURES
+    private class Departure(val id: String, val text: String)
+
+    // the journeys of an ÖBB board (ÖBB Scotty): the departures at `station` towards `dir`, or the arrivals there from `dir`
+    private fun fetchBoard(station: Station, dir: Station, arrivals: Boolean): List<JSONObject> {
+        val type = if (arrivals) "arr" else "dep"
+        val url = URL("https://fahrplan.oebb.at/bin/stboard.exe/dn?L=vs_scotty.vs_liveticker&evaId=${station.id}&dirInput=${dir.id}&boardType=$type&productsFilter=1111111111111&tickerID=$type&start=yes&eqstops=false&maxJourneys=${if (arrivals) 20 else 10}&additionalTime=0&outputMode=tickerDataOnly")
         val connection = (url.openConnection() as HttpURLConnection).apply { connectTimeout = 15_000; readTimeout = 15_000 }
         val text = try { connection.inputStream.bufferedReader(Charsets.ISO_8859_1).readText() } finally { connection.disconnect() }
         val journeys = JSONObject(text.substring(text.indexOf('{'))).getJSONArray("journey") // the answer is "journeysObj = {...}"
-        (0 until journeys.length()).mapNotNull { i ->
-            val journey = journeys.getJSONObject(i)
-            val rt = journey.optJSONObject("rt") // false without real time data
-            val time = journey.getString("ti").takeIf { TIME.matches(it) } ?: return@mapNotNull null // each departure must be 6 characters
-            val cancelled = rt?.optString("status") == "Ausfall"
-            // cancelled trains have "dlt": "": the planned time (an empty one shifted all the following departures on the watch)
-            val expected = rt?.optString("dlt")?.takeIf { TIME.matches(it) } ?: time
+        return (0 until journeys.length()).map { journeys.getJSONObject(it) }
+    }
+
+    // the planned time of a journey on a board ("HH:MM"), null if it has none
+    private fun planned(journey: JSONObject) = journey.getString("ti").takeIf { TIME.matches(it) }
+    private fun cancelled(journey: JSONObject) = journey.optJSONObject("rt")?.optString("status") == "Ausfall" // "rt" is false without real time data
+    // the expected time: cancelled trains have "dlt": "", then the planned one
+    private fun expected(journey: JSONObject) = journey.optJSONObject("rt")?.optString("dlt")?.takeIf { TIME.matches(it) } ?: planned(journey)
+
+    // evening: the station where the bike is if it is Tullnerbach-Pressbaum (the S50 that end there do not go to Pressbaum), else Pressbaum
+    private fun homeStation() = if (bikeAt(this) == TULLNERBACH.name) TULLNERBACH else PRESSBAUM
+
+    // like the departure board, see KEY_TRAIN_DEPARTURES; the type in lowercase if the train ends before `to` (e.g. at Hütteldorf); null on errors
+    private fun fetchDepartures(from: Station, via: Station, to: Station? = null): List<Departure>? = try {
+        fetchBoard(from, via, false).mapNotNull { journey ->
+            val time = planned(journey) ?: return@mapNotNull null // each departure must be 6 characters
+            val cancelled = cancelled(journey)
+            val expected = expected(journey) ?: time // an empty one shifted all the following departures on the watch
             val delayed = !cancelled && expected != time
             val product = journey.getString("pr")
             val type = (if (product.startsWith("S")) "S" else if (product.startsWith("REX")) "X" else product.take(1).uppercase())
                 .let { if (to != null && to.name !in journey.optString("lastStop", journey.optString("st"))) it.lowercase() else it }
-            expected.replace(":", "") + type + (if (cancelled) "C" else if (delayed) "D" else "0")
-        }.take(10).joinToString("")
+            Departure(journey.getString("id"), expected.replace(":", "") + type + (if (cancelled) "C" else if (delayed) "D" else "0"))
+        }.take(10)
     } catch (e: Exception) {
         status = "departures: $e"
         null
+    }
+
+    // the expected arrivals at the station from `from` by the id of the journey (not the cancelled ones)
+    private fun fetchArrivalTimes(at: Station, from: Station): Map<String, LocalTime> =
+        fetchBoard(at, from, true).filter { !cancelled(it) }.mapNotNull { journey -> expected(journey)?.let { journey.getString("id") to LocalTime.parse(it) } }.toMap()
+
+    // the expected arrival of each departure at the destination, see KEY_TRAIN_ARRIVALS: morning Tscherttegasse (the faster of Westbahnhof + U6 and Hütteldorf + U4),
+    // evening the station of the bike (homeStation); null if unknown (all on errors)
+    private fun fetchArrivals(departures: List<Departure>): List<LocalTime?> = try {
+        if (mode == 1) {
+            val westbahnhof = fetchArrivalTimes(WESTBAHNHOF, PRESSBAUM)
+            val huetteldorf = fetchArrivalTimes(HUETTELDORF, PRESSBAUM)
+            departures.map { listOfNotNull(westbahnhof[it.id]?.plusMinutes(VIA_U6_MINUTES), huetteldorf[it.id]?.plusMinutes(VIA_U4_MINUTES)).minOrNull() }
+        } else {
+            val home = fetchArrivalTimes(homeStation(), WESTBAHNHOF)
+            departures.map { home[it.id] }
+        }
+    } catch (e: Exception) {
+        status = "arrivals: $e"
+        departures.map { null }
     }
 
     // true if it reached the watchface
@@ -299,10 +350,10 @@ class TrainService : Service() {
         val note = if (mode == 2 && wasInVienna) "Rad: ${bikeAt(this) ?: "?"}" else ""
         val sender = DefaultPebbleSender(applicationContext)
         try {
-            val result = sender.sendDataToPebble(WATCHFACE_UUID, mapOf(KEY_TRAIN_DEPARTURES to PebbleDictionaryItem.Text(departures), KEY_TRAIN_NOTE to PebbleDictionaryItem.Text(note)))
+            val result = sender.sendDataToPebble(WATCHFACE_UUID, mapOf(KEY_TRAIN_DEPARTURES to PebbleDictionaryItem.Text(departures), KEY_TRAIN_ARRIVALS to PebbleDictionaryItem.Text(arrivals), KEY_TRAIN_NOTE to PebbleDictionaryItem.Text(note)))
             val outcome = result?.values?.joinToString { it.javaClass.simpleName } ?: "no Pebble app found"
-            lastSend = "${LocalTime.now().withNano(0)} \"$note\" $departures: $outcome"
-            if (outcome != sent) trainLog(this, "sent \"$note\" $departures: $outcome")
+            lastSend = "${LocalTime.now().withNano(0)} \"$note\" $departures $arrivals: $outcome"
+            if (outcome != sent) trainLog(this, "sent \"$note\" $departures $arrivals: $outcome")
             sent = outcome
             return !result.isNullOrEmpty() && result.values.all { it == TransmissionResult.Success }
         } finally {
@@ -322,6 +373,7 @@ class TrainService : Service() {
         trainLog(this, status)
         mode = 0
         departures = ""
+        arrivals = ""
         fetching?.cancel()
         LocationManagerCompat.removeUpdates(getSystemService(LocationManager::class.java), listener)
         requestTransitions(false)
